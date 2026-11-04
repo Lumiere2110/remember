@@ -5,7 +5,10 @@
   const MARKS = ["ア", "イ", "ウ", "エ"];
   const SETTINGS_KEY = "remember.settings";
   const TAGS_KEY = "remember.tags";
+  const TAG_NAMES_KEY = "remember.tagNames";
   const FAVORITE = "お気に入り";
+  // 最初から用意しているタグ。名前の変更・削除はできない
+  const BUILTIN_TAGS = [FAVORITE, "復習"];
 
   const TIME_OPTIONS = [0, 10, 20, 30, 60]; // 0 = 制限なし
 
@@ -143,11 +146,53 @@
     userTags[item.key] = list.includes(tag) ? list.filter((t) => t !== tag) : [...list, tag];
     if (!userTags[item.key].length) delete userTags[item.key];
     saveJSON(TAGS_KEY, userTags);
+    addTagName(tag);
   }
 
-  // お気に入りを先頭に、使われているタグを並べる
+  // 自分で作ったタグの一覧。問題が0問になってもタグが消えないように名前を保存しておく
+  const customTagNames = loadJSON(TAG_NAMES_KEY, []);
+
+  function addTagName(tag) {
+    if (BUILTIN_TAGS.includes(tag) || customTagNames.includes(tag)) return;
+    customTagNames.push(tag);
+    saveJSON(TAG_NAMES_KEY, customTagNames);
+  }
+
+  // terms.js で問題に書いたタグ（画面からは外せない）
+  const isFixedTag = (tag) => allItems().some((i) => (i.tags || []).includes(tag));
+  const isEditableTag = (tag) => !BUILTIN_TAGS.includes(tag) && !isFixedTag(tag);
+
+  function renameTag(from, to) {
+    for (const key of Object.keys(userTags)) {
+      if (userTags[key].includes(from)) {
+        userTags[key] = [...new Set(userTags[key].map((t) => (t === from ? to : t)))];
+      }
+    }
+    const i = customTagNames.indexOf(from);
+    if (i >= 0) customTagNames.splice(i, 1);
+    saveJSON(TAGS_KEY, userTags);
+    saveJSON(TAG_NAMES_KEY, customTagNames);
+    addTagName(to);
+  }
+
+  function deleteTag(tag) {
+    for (const key of Object.keys(userTags)) {
+      userTags[key] = userTags[key].filter((t) => t !== tag);
+      if (!userTags[key].length) delete userTags[key];
+    }
+    const i = customTagNames.indexOf(tag);
+    if (i >= 0) customTagNames.splice(i, 1);
+    saveJSON(TAGS_KEY, userTags);
+    saveJSON(TAG_NAMES_KEY, customTagNames);
+  }
+
+  function tagLabel(tag, active = true) {
+    return tag === FAVORITE ? `${active ? "★" : "☆"} ${tag}` : `# ${tag}`;
+  }
+
+  // 用意したタグ → 自分で作ったタグ → terms.js のタグ の順に並べる
   function allTagNames() {
-    const names = new Set([FAVORITE]);
+    const names = new Set([...BUILTIN_TAGS, ...customTagNames]);
     for (const item of allItems()) tagsOf(item).forEach((t) => names.add(t));
     return [...names];
   }
@@ -166,7 +211,7 @@
           class: `tag-chip ${active ? "active" : ""} ${tag === FAVORITE ? "fav" : ""}`,
           disabled: locked,
           title: locked ? "最初から付いているタグ" : active ? "タグを外す" : "タグを付ける",
-          text: tag === FAVORITE ? `${active ? "★" : "☆"} ${tag}` : `# ${tag}`,
+          text: tagLabel(tag, active),
           onclick: () => { toggleTag(item, tag); render(); onChange?.(); },
         });
       });
@@ -310,17 +355,139 @@
 
   function tagSection() {
     const items = allItems();
-    const tags = allTagNames().map((tag) => [tag, items.filter((i) => hasTag(i, tag))]);
     if (!items.length) return null;
+
+    const newTag = el("input", { type: "text", class: "text-input", placeholder: "新しいタグの名前", maxlength: 20 });
+    function create() {
+      const tag = newTag.value.trim();
+      if (!tag) return;
+      addTagName(tag);
+      go(tagScreen, tag);
+    }
+    newTag.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) create(); });
+
     return el("div", { class: "section-gap" }, [
-      el("h2", { text: "タグから解く" }),
-      el("p", { class: "lead", text: "タグを付けた問題を、用語をまたいでまとめて解けます。" }),
-      el("div", { class: "list" }, tags.map(([tag, list]) =>
-        listItem(tag === FAVORITE ? `★ ${tag}` : `# ${tag}`, `${list.length}問`,
-          () => go(settingsScreen, { title: tag === FAVORITE ? `★ ${tag}` : `# ${tag}`, items: list, mixed: true }),
-          { disabled: list.length === 0 })
-      )),
+      el("h2", { text: "タグ" }),
+      el("p", { class: "lead", text: "タグを選ぶと、入っている問題の確認・追加・削除や、まとめて解くことができます。" }),
+      el("div", { class: "list" }, allTagNames().map((tag) => {
+        const n = items.filter((i) => hasTag(i, tag)).length;
+        return listItem(tagLabel(tag), `${n}問`, () => go(tagScreen, tag));
+      })),
+      el("div", { class: "inline new-tag" }, [
+        newTag,
+        el("button", { class: "small-btn", type: "button", text: "タグを作る", onclick: create }),
+      ]),
     ]);
+  }
+
+  // ---------- タグの管理 ----------
+
+  function tagScreen(tag) {
+    const root = el("section");
+    let addQuery = "";
+    let addOpen = false;
+
+    function questionRow(item, action) {
+      return el("div", { class: "manage-item" }, [
+        el("div", { class: "manage-body" }, [
+          el("div", { class: "manage-meta" }, [levelBadge(item), el("span", { text: item.term.name })]),
+          el("p", { class: "manage-q", text: item.question }),
+        ]),
+        action,
+      ]);
+    }
+
+    function render() {
+      const items = allItems();
+      const inTag = items.filter((i) => hasTag(i, tag));
+      const others = items.filter((i) => !hasTag(i, tag));
+      const q = addQuery.trim().toLowerCase();
+      const addable = q
+        ? others.filter((i) => [i.question, i.term.name].some((s) => s.toLowerCase().includes(q)))
+        : others;
+
+      // 名前の変更・削除は自分で作ったタグだけ
+      let editArea = null;
+      if (isEditableTag(tag)) {
+        const nameInput = el("input", { type: "text", class: "text-input", value: tag, maxlength: 20 });
+        editArea = el("div", { class: "card tag-settings" }, [
+          el("span", { class: "field-label", text: "タグの名前" }),
+          el("div", { class: "inline" }, [
+            nameInput,
+            el("button", {
+              class: "small-btn", type: "button", text: "変更",
+              onclick: () => {
+                const to = nameInput.value.trim();
+                if (!to || to === tag) return;
+                if (allTagNames().includes(to) && !confirm(`「${to}」はすでにあります。まとめますか？`)) return;
+                renameTag(tag, to);
+                replace(tagScreen, to);
+              },
+            }),
+            el("button", {
+              class: "small-btn danger", type: "button", text: "タグを削除",
+              onclick: () => {
+                if (!confirm(`タグ「${tag}」を削除しますか？（問題は消えません）`)) return;
+                deleteTag(tag);
+                back();
+              },
+            }),
+          ]),
+        ]);
+      }
+
+      const addSearch = el("input", { type: "search", class: "text-input", placeholder: "問題文・用語名で絞り込み", value: addQuery });
+      addSearch.addEventListener("input", () => {
+        addQuery = addSearch.value;
+        render();
+        const s = root.querySelector(".add-search");
+        s.focus();
+        s.setSelectionRange(s.value.length, s.value.length);
+      });
+      addSearch.classList.add("add-search");
+
+      const addArea = el("details", { class: "add-area", open: addOpen }, [
+        el("summary", { text: `問題を追加する（${others.length}問から）` }),
+        addSearch,
+        addable.length
+          ? el("div", { class: "manage-list" }, addable.map((item) =>
+              questionRow(item, el("button", {
+                class: "small-btn", type: "button", text: "追加",
+                onclick: () => { toggleTag(item, tag); render(); },
+              }))
+            ))
+          : el("div", { class: "empty", text: others.length ? "一致する問題がありません。" : "追加できる問題はありません。" }),
+      ]);
+      addArea.addEventListener("toggle", () => { addOpen = addArea.open; });
+
+      setChildren(
+        root,
+        el("h2", { text: tagLabel(tag) }),
+        el("p", { class: "lead", text: `${inTag.length}問` }),
+        el("div", { class: "actions tag-actions" }, [
+          el("button", {
+            class: "primary-btn", type: "button", text: "このタグの問題を解く", disabled: inTag.length === 0,
+            onclick: () => go(settingsScreen, { title: tagLabel(tag), items: inTag, mixed: true }),
+          }),
+        ]),
+        editArea,
+        el("h2", { text: "入っている問題", class: "section-gap" }),
+        inTag.length
+          ? el("div", { class: "manage-list" }, inTag.map((item) => {
+              const fixed = (item.tags || []).includes(tag);
+              return questionRow(item, el("button", {
+                class: "small-btn", type: "button", text: fixed ? "固定" : "外す", disabled: fixed,
+                title: fixed ? "terms.js で付けたタグなので外せません" : "このタグから外す",
+                onclick: () => { toggleTag(item, tag); render(); },
+              }));
+            }))
+          : el("div", { class: "empty", text: "まだ問題が入っていません。下の「問題を追加する」から追加できます。" }),
+        addArea
+      );
+    }
+
+    render();
+    return root;
   }
 
   // ---------- カテゴリ・用語選択 ----------
@@ -376,7 +543,7 @@
       ? el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "出題する問題" }),
           segmented(
-            [[null, "すべて"], ...usedTags.map((t) => [t, t === FAVORITE ? `★ ${t}` : `# ${t}`])],
+            [[null, "すべて"], ...usedTags.map((t) => [t, tagLabel(t)])],
             null,
             (v) => { tagFilter = v; updateCount(); }
           ),

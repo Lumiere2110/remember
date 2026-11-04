@@ -195,6 +195,52 @@ input[type="number"] {
   font-size: 0.82rem;
 }
 
+/* タグの管理 */
+.text-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.small-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.small-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.small-btn:disabled { opacity: 0.5; cursor: default; }
+.small-btn.danger { color: var(--wrong); }
+.small-btn.danger:hover { border-color: var(--wrong); color: var(--wrong); }
+.new-tag { margin-top: 12px; flex-wrap: nowrap; }
+.tag-actions { margin: 0 0 16px; }
+.tag-settings .inline { flex-wrap: nowrap; }
+
+.manage-list { display: grid; gap: 8px; }
+.manage-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.manage-body { flex: 1; min-width: 0; }
+.manage-meta { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 0.82rem; }
+.manage-meta .level-badge { margin: 0; }
+.manage-q { margin: 4px 0 0; font-size: 0.92rem; }
+
+.add-area { margin-top: 24px; }
+.add-area summary { cursor: pointer; font-weight: 600; color: var(--accent); margin-bottom: 12px; }
+.add-area .text-input { width: 100%; margin-bottom: 12px; }
+
 /* クイズ画面 */
 .quiz-top {
   display: flex;
