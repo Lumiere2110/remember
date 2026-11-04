@@ -73,11 +73,12 @@
 
   // ---------- データ ----------
 
-  // 問題に用語と識別キーを持たせる。キーは用語名＋問題文なので、並び替えてもタグが外れない
+  // 問題に用語と識別キーを持たせる。キーは問題文なので、並び替えてもタグが外れず、
+  // 複数の用語に入れた同じ問題はタグを共有する
   for (const term of TERMS) {
     term.items = (term.questions || [])
       .filter((q) => Array.isArray(q.choices) && q.choices.length === 4 && q.answer >= 0 && q.answer < 4)
-      .map((q) => ({ ...q, term, key: `${term.name}::${q.question}` }));
+      .map((q) => ({ ...q, term, key: q.question }));
   }
 
   // ジャンル → カテゴリ → 用語 の木を、用語に書かれた名前から作る
@@ -90,12 +91,25 @@
     category.terms.push(term);
   }
 
-  const allItems = () => TERMS.flatMap((t) => t.items);
+  // 全問題。複数の用語に入っている問題は1つにまとめる
+  const allItems = () => {
+    const seen = new Set();
+    return TERMS.flatMap((t) => t.items).filter((i) => !seen.has(i.key) && seen.add(i.key));
+  };
 
   // ---------- タグ ----------
   // ユーザーが付けたタグはブラウザに保存する。terms.js の tags は固定タグとして常に付く
 
   const userTags = loadJSON(TAGS_KEY, {});
+
+  // 以前のキー「用語名::問題文」で保存されたタグを、問題文だけのキーに移す
+  for (const oldKey of Object.keys(userTags)) {
+    const sep = oldKey.indexOf("::");
+    if (sep < 0) continue;
+    const newKey = oldKey.slice(sep + 2);
+    userTags[newKey] = [...new Set([...(userTags[newKey] || []), ...userTags[oldKey]])];
+    delete userTags[oldKey];
+  }
 
   function tagsOf(item) {
     return [...new Set([...(item.tags || []), ...(userTags[item.key] || [])])];
