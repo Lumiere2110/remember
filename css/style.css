@@ -34,14 +34,15 @@
 
 * { box-sizing: border-box; }
 
-/* 本文の幅。PC の広い画面では、本文と文字を大きくする */
+/* 本文の幅。PC の広い画面では、画面の横幅の 90%（最大 1600px）まで広げ、文字も大きくする */
 :root { --page-width: 720px; }
+@media (min-width: 800px) {
+  :root { --page-width: min(90vw, 1600px); }
+}
 @media (min-width: 1100px) {
-  :root { --page-width: 960px; }
   html { font-size: 18px; }
 }
 @media (min-width: 1600px) {
-  :root { --page-width: 1080px; }
   html { font-size: 20px; }
 }
 
