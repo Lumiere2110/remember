@@ -20,7 +20,8 @@
     { value: 4, label: "Lv.4", desc: "それ以上の難問" },
     { value: 0, label: "未設定", desc: "難易度なし" },
   ];
-  const DEFAULT_SETTINGS = { timeLimit: 0, count: 0, order: "sequential" };
+  // mode: "exam" = 最後にまとめて採点（本番形式） / "instant" = 1問ずつ答え合わせ
+  const DEFAULT_SETTINGS = { timeLimit: 0, count: 0, order: "sequential", mode: "exam" };
 
   const app = document.getElementById("app");
   const backBtn = document.getElementById("back-btn");
@@ -662,17 +663,33 @@
     const startBtn = el("button", { class: "primary-btn", type: "button", text: "スタート", onclick: start });
     updateCount();
 
+    // 採点のしかた
+    const modeSeg = segmented(
+      [["exam", "最後にまとめて採点（本番形式）"], ["instant", "1問ずつ答え合わせ"]],
+      settings.mode,
+      (v) => { settings.mode = v; }
+    );
+
     return el("section", {}, [
       el("h2", { text: source.title }),
       lead,
       termExplanation(source.term),
       el("div", { class: "card" }, [
+        el("div", { class: "field" }, [
+          el("span", { class: "field-label", text: "採点のしかた" }),
+          modeSeg,
+          el("p", {
+            class: "field-hint",
+            text: "本番形式：CBT試験のように全問に答えてから「試験終了」で採点。前の問題に戻って答えを変えたり、「後で見直す」を付けたりできます。",
+          }),
+        ]),
         tagField,
         levelField,
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "回答時間（1問あたり）" }),
           timeSeg,
           el("div", { class: "inline", style: "margin-top:8px" }, [customTime, "秒（自由に入力）"]),
+          el("p", { class: "field-hint", text: "本番形式では「1問あたりの時間 × 問題数」が全体の制限時間になります。" }),
         ]),
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "問題数" }),
@@ -693,29 +710,202 @@
     return settings.count ? list.slice(0, settings.count) : list;
   }
 
-  // ---------- クイズ ----------
+  // ---------- クイズ（CBT方式の画面） ----------
+  // settings.mode が "instant" なら1問ずつ答え合わせ、それ以外は最後にまとめて採点（本番形式）
 
   function quizScreen(source, questions, settings) {
+    return settings.mode === "instant"
+      ? instantQuiz(source, questions, settings)
+      : examQuiz(source, questions, settings);
+  }
+
+  function formatTime(ms) {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+  // CBT の画面の枠。上：問題番号・残り時間、中：問題（本番形式では問題一覧も）、下：移動ボタン
+  function cbtFrame({ head, body, side, foot, showSide }) {
+    return el("div", { class: "cbt" }, [
+      el("div", { class: "cbt-head" }, head),
+      el("div", { class: `cbt-main${side ? " has-side" : ""}${showSide ? " show-side" : ""}` }, [
+        el("div", { class: "cbt-body" }, body),
+        side ? el("aside", { class: "cbt-side" }, side) : null,
+      ]),
+      el("div", { class: "cbt-foot" }, foot),
+    ]);
+  }
+
+  // 選択肢。○ ア 選択肢の文 の形で表示する
+  function choiceButton(i, text, onclick) {
+    return el("button", { class: "choice", type: "button", onclick }, [
+      el("span", { class: "radio" }),
+      el("span", { class: "mark", text: MARKS[i] }),
+      el("span", { class: "choice-text", text }),
+    ]);
+  }
+
+  function navButton(text, onclick, { key, primary, disabled, extraClass } = {}) {
+    return el("button", {
+      class: `nav-btn${primary ? " primary" : ""}${extraClass ? ` ${extraClass}` : ""}`,
+      type: "button", text, onclick, disabled, "data-key": key,
+    });
+  }
+
+  // 本番形式：全問に答えてから「試験終了」で採点する
+  function examQuiz(source, questions, settings) {
+    // 選択肢の並びは問題ごとに最初に1回だけ決める（前後に移動しても変わらない）
+    const states = questions.map((q) => ({ order: shuffle(q.choices.map((_, i) => i)), selected: null, flag: false }));
+    let index = 0;
+    let showList = false; // 狭い画面で問題一覧を開いているか
+    let finished = false;
+    const root = el("section", { class: "cbt-screen" });
+    const timeLabel = el("span", { class: "cbt-time" });
+
+    function finish() {
+      if (finished) return;
+      finished = true;
+      stopTimer();
+      const results = questions.map((q, i) => ({
+        question: q,
+        selected: states[i].selected,
+        correct: states[i].selected === q.answer,
+        order: states[i].order,
+      }));
+      // 戻るで結果から試験に戻らないよう、履歴を差し替える
+      replace(resultScreen, source, results, settings);
+    }
+
+    function confirmFinish() {
+      const unanswered = states.filter((s) => s.selected === null).length;
+      const flagged = states.filter((s) => s.flag).length;
+      const close = () => overlay.remove();
+      const overlay = el("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === overlay) close(); } }, [
+        el("div", { class: "modal", role: "dialog", "aria-modal": "true" }, [
+          el("p", { class: "modal-title", text: "試験を終了して採点しますか？" }),
+          unanswered ? el("p", { class: "modal-warn", text: `未回答の問題が ${unanswered}問 あります。` }) : null,
+          flagged ? el("p", { class: "modal-warn", text: `「後で見直す」が付いた問題が ${flagged}問 あります。` }) : null,
+          !unanswered && !flagged ? el("p", { text: "すべての問題に回答しています。" }) : null,
+          el("div", { class: "modal-actions" }, [
+            navButton("問題に戻る", close, { extraClass: "modal-cancel" }),
+            navButton("終了して採点する", finish, { primary: true }),
+          ]),
+        ]),
+      ]);
+      root.append(overlay);
+      overlay.querySelector(".modal-cancel").focus();
+    }
+
+    function moveTo(i) {
+      index = i;
+      showList = false;
+      render();
+    }
+
+    function questionList() {
+      const answered = states.filter((s) => s.selected !== null).length;
+      return [
+        el("p", { class: "q-list-title", text: `問題一覧（回答済み ${answered} / ${questions.length}）` }),
+        el("div", { class: "q-grid" }, states.map((s, i) =>
+          el("button", {
+            type: "button",
+            class: ["q-cell", s.selected !== null && "answered", s.flag && "flagged", i === index && "current"].filter(Boolean).join(" "),
+            title: `問${i + 1}：${s.selected !== null ? "回答済み" : "未回答"}${s.flag ? "・後で見直す" : ""}`,
+            text: String(i + 1),
+            onclick: () => moveTo(i),
+          })
+        )),
+        el("div", { class: "q-legend" }, [
+          el("span", {}, [el("span", { class: "q-cell mini answered" }), "回答済み"]),
+          el("span", {}, [el("span", { class: "q-cell mini" }), "未回答"]),
+          el("span", {}, [el("span", { class: "q-cell mini flagged" }), "後で見直す"]),
+        ]),
+      ];
+    }
+
+    function render() {
+      const q = questions[index];
+      const s = states[index];
+      const isFirst = index === 0;
+      const isLast = index === questions.length - 1;
+
+      const choiceBtns = s.order.map((orig, i) => {
+        const btn = choiceButton(i, q.choices[orig], () => { s.selected = orig; render(); });
+        if (s.selected === orig) btn.classList.add("selected");
+        return btn;
+      });
+      const flag = el("input", { type: "checkbox", checked: s.flag });
+      flag.addEventListener("change", () => { s.flag = flag.checked; render(); });
+
+      setChildren(root, cbtFrame({
+        head: [
+          el("span", { class: "cbt-num", text: `問${index + 1}` }),
+          el("span", { class: "cbt-count", text: `/ ${questions.length}問` }),
+          el("span", { class: "cbt-term", text: source.mixed ? q.term.name : source.title }),
+          el("label", { class: "cbt-flag" }, [flag, "後で見直す"]),
+          timeLabel,
+        ],
+        body: [
+          levelBadge(q),
+          el("p", { class: "question-text", text: q.question }),
+          el("div", { class: "choices" }, choiceBtns),
+          tagEditor(q),
+        ],
+        side: questionList(),
+        showSide: showList,
+        foot: [
+          navButton("◀ 前の問題", () => moveTo(index - 1), { key: "prev", disabled: isFirst }),
+          navButton(showList ? "問題一覧を閉じる" : "問題一覧", () => { showList = !showList; render(); }, { extraClass: "list-toggle" }),
+          navButton("次の問題 ▶", () => moveTo(index + 1), { key: "next", disabled: isLast, primary: !isLast }),
+          el("span", { class: "spacer" }),
+          navButton("試験終了", confirmFinish, { primary: isLast, extraClass: "finish" }),
+        ],
+      }));
+    }
+
+    // 時間。制限ありなら「1問あたりの時間 × 問題数」から減らしていき、0 になったら採点する。制限なしなら経過時間
+    const limitMs = settings.timeLimit * 1000 * questions.length;
+    const startAt = performance.now();
+    const tick = (now) => {
+      const elapsed = now - startAt;
+      if (limitMs) {
+        const remain = limitMs - elapsed;
+        timeLabel.textContent = `残り ${formatTime(remain)}`;
+        timeLabel.classList.toggle("low", remain <= Math.min(60000, limitMs * 0.2));
+        if (remain <= 0) { finish(); return; }
+      } else {
+        timeLabel.textContent = `経過 ${formatTime(elapsed)}`;
+      }
+      timerId = requestAnimationFrame(tick);
+    };
+    timerId = requestAnimationFrame(tick);
+
+    render();
+    return root;
+  }
+
+  // 1問ずつ答え合わせ：選ぶとすぐに正解・解説を表示する
+  function instantQuiz(source, questions, settings) {
     const results = [];
     let index = 0;
-    const root = el("section");
+    const root = el("section", { class: "cbt-screen" });
 
     function render() {
       stopTimer();
       const q = questions[index];
       // 選択肢は毎回ランダムに並べる。order[i] = 元の選択肢番号
       const order = shuffle(q.choices.map((_, i) => i));
+      const isLast = index === questions.length - 1;
       let answered = false;
 
       const timerBar = el("div", { class: "timer-bar" });
-      const timeLabel = el("span");
+      const timeLabel = el("span", { class: "cbt-time" });
       const feedbackArea = el("div");
-      const choiceBtns = order.map((orig, i) =>
-        el("button", { class: "choice", type: "button", onclick: () => answer(orig) }, [
-          el("span", { class: "mark", text: MARKS[i] }),
-          el("span", { text: q.choices[orig] }),
-        ])
-      );
+      const nextBtn = navButton(isLast ? "結果を見る ▶" : "次の問題 ▶", () => {
+        if (isLast) replace(resultScreen, source, results, settings); // 戻るで結果からクイズに戻らないよう、履歴を差し替える
+        else { index++; render(); }
+      }, { key: "next", primary: true, disabled: true });
+      const choiceBtns = order.map((orig, i) => choiceButton(i, q.choices[orig], () => answer(orig)));
 
       function answer(selected) {
         if (answered) return;
@@ -726,12 +916,12 @@
 
         choiceBtns.forEach((btn, i) => {
           btn.disabled = true;
+          if (order[i] === selected) btn.classList.add("selected");
           if (order[i] === q.answer) btn.classList.add("correct");
           else if (order[i] === selected) btn.classList.add("wrong");
         });
 
         const title = correct ? "正解！" : selected === null ? "時間切れ" : "不正解";
-        const isLast = index === questions.length - 1;
         setChildren(
           feedbackArea,
           el("div", { class: `feedback ${correct ? "correct" : "wrong"}` }, [
@@ -739,39 +929,29 @@
             correct ? null : el("p", { text: `正解：${q.choices[q.answer]}` }),
           ]),
           explanationBlock(q, order),
-          termExplanation(q.term),
-          el("div", { class: "actions" }, [
-            el("button", {
-              class: "primary-btn", type: "button",
-              text: isLast ? "結果を見る" : "次の問題へ",
-              onclick: () => {
-                if (isLast) {
-                  // 戻るで結果からクイズに戻らないよう、履歴を差し替える
-                  replace(resultScreen, source, results, settings);
-                } else {
-                  index++;
-                  render();
-                }
-              },
-            }),
-          ])
+          termExplanation(q.term)
         );
-        feedbackArea.querySelector(".primary-btn").focus();
+        nextBtn.disabled = false;
+        nextBtn.focus();
       }
 
-      setChildren(
-        root,
-        el("div", { class: "quiz-top" }, [
-          el("span", { text: `${source.mixed ? q.term.name : source.title}　${index + 1} / ${questions.length}` }),
+      setChildren(root, cbtFrame({
+        head: [
+          el("span", { class: "cbt-num", text: `問${index + 1}` }),
+          el("span", { class: "cbt-count", text: `/ ${questions.length}問` }),
+          el("span", { class: "cbt-term", text: source.mixed ? q.term.name : source.title }),
           timeLabel,
-        ]),
-        levelBadge(q),
-        settings.timeLimit ? el("div", { class: "timer" }, [timerBar]) : null,
-        el("p", { class: "question-text", text: q.question }),
-        el("div", { class: "choices" }, choiceBtns),
-        tagEditor(q),
-        feedbackArea
-      );
+        ],
+        body: [
+          settings.timeLimit ? el("div", { class: "timer" }, [timerBar]) : null,
+          levelBadge(q),
+          el("p", { class: "question-text", text: q.question }),
+          el("div", { class: "choices" }, choiceBtns),
+          tagEditor(q),
+          feedbackArea,
+        ],
+        foot: [el("span", { class: "spacer" }), nextBtn],
+      }));
 
       if (settings.timeLimit) {
         const limitMs = settings.timeLimit * 1000;
@@ -781,6 +961,7 @@
           timerBar.style.width = `${(remain / limitMs) * 100}%`;
           timerBar.classList.toggle("low", remain <= Math.min(5000, limitMs * 0.3));
           timeLabel.textContent = `残り ${Math.ceil(remain / 1000)}秒`;
+          timeLabel.classList.toggle("low", remain <= Math.min(5000, limitMs * 0.3));
           if (remain <= 0) answer(null);
           else timerId = requestAnimationFrame(tick);
         };
@@ -792,14 +973,25 @@
     return root;
   }
 
-  // 数字キー 1〜4 / A〜D で回答（ア〜エの順。3択ならア〜ウ）、Enter で次へ
+  // 数字キー 1〜4 / A〜D で回答（ア〜エの順。3択ならア〜ウ）、← → で前後の問題、Enter で次へ
   document.addEventListener("keydown", (e) => {
+    const modal = app.querySelector(".modal-backdrop");
+    if (modal) {
+      if (e.key === "Escape") modal.remove(); // 確認画面を閉じる
+      return;
+    }
     // Esc で一つ前の画面に戻る（入力欄では入力のじゃまをしない）
     if (e.key === "Escape" && e.target.tagName !== "INPUT" && !backBtn.hidden) {
       back();
       return;
     }
-    if (e.target.tagName === "INPUT" || e.key.length !== 1) return;
+    if (e.target.tagName === "INPUT") return;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const btn = app.querySelector(`[data-key="${e.key === "ArrowLeft" ? "prev" : "next"}"]`);
+      if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+      return;
+    }
+    if (e.key.length !== 1) return;
     const key = e.key.toUpperCase();
     const i = "1234".includes(key) ? "1234".indexOf(key) : "ABCD".indexOf(key);
     const choices = app.querySelectorAll(".choice");
@@ -822,7 +1014,7 @@
           class: "a",
           text: r.correct
             ? `正解：${q.choices[q.answer]}`
-            : `あなたの回答：${r.selected === null ? "時間切れ" : q.choices[r.selected]} ／ 正解：${q.choices[q.answer]}`,
+            : `あなたの回答：${r.selected === null ? (settings.mode === "instant" ? "時間切れ" : "未回答") : q.choices[r.selected]} ／ 正解：${q.choices[q.answer]}`,
         }),
         explanationBlock(q)
           ? el("details", { class: "review-explain" }, [el("summary", { text: "解説を見る" }), explanationBlock(q, r.order)])
