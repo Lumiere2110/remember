@@ -8,6 +8,15 @@
   const FAVORITE = "お気に入り";
 
   const TIME_OPTIONS = [0, 10, 20, 30, 60]; // 0 = 制限なし
+
+  // 難易度。問題の level に 1〜4 を書く。書いていない問題は「未設定」(0)
+  const LEVELS = [
+    { value: 1, label: "Lv.1", desc: "ITパスポート" },
+    { value: 2, label: "Lv.2", desc: "基本情報技術者" },
+    { value: 3, label: "Lv.3", desc: "応用情報技術者" },
+    { value: 4, label: "Lv.4", desc: "それ以上の難問" },
+    { value: 0, label: "未設定", desc: "難易度なし" },
+  ];
   const DEFAULT_SETTINGS = { timeLimit: 0, count: 0, order: "sequential" };
 
   const app = document.getElementById("app");
@@ -89,6 +98,16 @@
     let category = genre.categories.find((c) => c.name === term.category);
     if (!category) genre.categories.push((category = { name: term.category, terms: [] }));
     category.terms.push(term);
+  }
+
+  function levelOf(item) {
+    return [1, 2, 3, 4].includes(item.level) ? item.level : 0;
+  }
+
+  function levelBadge(item) {
+    const l = LEVELS.find((x) => x.value === levelOf(item));
+    if (!l.value) return null;
+    return el("span", { class: `level-badge lv${l.value}`, text: `${l.label} ${l.desc}` });
   }
 
   // 全問題。複数の用語に入っている問題は1つにまとめる
@@ -330,7 +349,10 @@
   function settingsScreen(source) {
     const settings = { ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) };
     let tagFilter = null; // null = すべて
-    const filtered = () => (tagFilter ? source.items.filter((i) => hasTag(i, tagFilter)) : source.items);
+    // 難易度は複数選べる。前回選んだ難易度を引き継ぐ
+    const levels = new Set(settings.levels || LEVELS.map((l) => l.value));
+    const filtered = () =>
+      source.items.filter((i) => (!tagFilter || hasTag(i, tagFilter)) && levels.has(levelOf(i)));
 
     function segmented(options, current, onSelect) {
       const wrap = el("div", { class: "segmented" });
@@ -360,6 +382,32 @@
           ),
         ])
       : null;
+
+    // 難易度（複数選択）。問題がない難易度は押せない
+    const levelWrap = el("div", { class: "segmented" });
+    for (const l of LEVELS) {
+      const n = source.items.filter((i) => levelOf(i) === l.value).length;
+      if (l.value === 0 && n === 0) continue; // 未設定の問題がなければ出さない
+      const btn = el("button", {
+        type: "button",
+        class: levels.has(l.value) && n ? "active" : "",
+        disabled: n === 0,
+        title: l.desc,
+        text: `${l.label}（${n}）`,
+        onclick: () => {
+          if (levels.has(l.value)) levels.delete(l.value);
+          else levels.add(l.value);
+          btn.classList.toggle("active", levels.has(l.value));
+          updateCount();
+        },
+      });
+      levelWrap.append(btn);
+    }
+    const levelField = el("div", { class: "field" }, [
+      el("span", { class: "field-label", text: "難易度（複数選べます）" }),
+      levelWrap,
+      el("p", { class: "field-hint", text: LEVELS.filter((l) => l.value).map((l) => `${l.label}：${l.desc}`).join("　") }),
+    ]);
 
     // 回答時間
     const customTime = el("input", {
@@ -408,6 +456,7 @@
       settings.count = allCheck.checked
         ? 0
         : Math.min(items.length, Math.max(1, parseInt(countInput.value, 10) || items.length));
+      settings.levels = [...levels];
       saveJSON(SETTINGS_KEY, settings);
       go(quizScreen, source, pickQuestions(items, settings), settings);
     }
@@ -421,6 +470,7 @@
       termExplanation(source.term),
       el("div", { class: "card" }, [
         tagField,
+        levelField,
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "回答時間（1問あたり）" }),
           timeSeg,
@@ -517,6 +567,7 @@
           el("span", { text: `${source.mixed ? q.term.name : source.title}　${index + 1} / ${questions.length}` }),
           timeLabel,
         ]),
+        levelBadge(q),
         settings.timeLimit ? el("div", { class: "timer" }, [timerBar]) : null,
         el("p", { class: "question-text", text: q.question }),
         el("div", { class: "choices" }, choiceBtns),
@@ -562,6 +613,7 @@
     const review = results.map((r) => {
       const q = r.question;
       return el("div", { class: `review-item ${r.correct ? "" : "wrong"}` }, [
+        levelBadge(q),
         el("p", { class: "q", text: `${r.correct ? "○" : "×"} ${q.question}` }),
         el("p", {
           class: "a",

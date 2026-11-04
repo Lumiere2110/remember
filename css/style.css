@@ -241,6 +241,23 @@ input[type="number"] {
 .feedback-title { font-weight: 700; margin: 0 0 4px; }
 .feedback p { margin: 0; white-space: pre-wrap; }
 
+/* 難易度 */
+.level-badge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid currentColor;
+}
+.level-badge.lv1 { color: var(--correct); }
+.level-badge.lv2 { color: var(--accent); }
+.level-badge.lv3 { color: var(--fav); }
+.level-badge.lv4 { color: var(--wrong); }
+.review-item .level-badge { margin-bottom: 4px; }
+.segmented button:disabled { opacity: 0.45; cursor: default; }
+
 /* 解説 */
 .explain {
   margin-top: 12px;
