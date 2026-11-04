@@ -179,9 +179,10 @@
     ]);
   }
 
-  function termExplanation(term, open) {
+  // 用語の解説は閉じた状態で出し、クリックで開く
+  function termExplanation(term) {
     if (!term || !term.explanation) return null;
-    return el("details", { class: "term-explain", open }, [
+    return el("details", { class: "term-explain" }, [
       el("summary", { text: `用語の解説：${term.name}` }),
       el("p", { text: term.explanation }),
     ]);
@@ -403,7 +404,7 @@
     return el("section", {}, [
       el("h2", { text: source.title }),
       lead,
-      termExplanation(source.term, true),
+      termExplanation(source.term),
       el("div", { class: "card" }, [
         tagField,
         el("div", { class: "field" }, [
@@ -476,7 +477,7 @@
             correct ? null : el("p", { text: `正解：${q.choices[q.answer]}` }),
           ]),
           explanationBlock(q, order),
-          termExplanation(q.term, false),
+          termExplanation(q.term),
           el("div", { class: "actions" }, [
             el("button", {
               class: "primary-btn", type: "button",
