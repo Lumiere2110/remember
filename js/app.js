@@ -317,6 +317,7 @@
     stopTimer();
     const [screen, args] = history[history.length - 1];
     backBtn.hidden = history.length <= 1;
+    document.body.classList.toggle("on-title", screen === titleScreen); // タイトル画面ではヘッダーを隠す
     app.replaceChildren(screen(...args));
     window.scrollTo(0, 0);
   }
@@ -766,6 +767,7 @@
       if (finished) return;
       finished = true;
       stopTimer();
+      playSound("finish");
       const results = questions.map((q, i) => ({
         question: q,
         selected: states[i].selected,
@@ -841,7 +843,7 @@
         head: [
           el("span", { class: "cbt-num", text: `問${index + 1}` }),
           el("span", { class: "cbt-count", text: `/ ${questions.length}問` }),
-          el("span", { class: "cbt-term", text: source.mixed ? q.term.name : source.title }),
+          el("span", { class: "cbt-term", text: source.hideTerm ? source.title : source.mixed ? q.term.name : source.title }),
           el("label", { class: "cbt-flag" }, [flag, "後で見直す"]),
           timeLabel,
         ],
@@ -863,15 +865,20 @@
       }));
     }
 
-    // 時間。制限ありなら「1問あたりの時間 × 問題数」から減らしていき、0 になったら採点する。制限なしなら経過時間
-    const limitMs = settings.timeLimit * 1000 * questions.length;
+    // 時間。制限ありなら「1問あたりの時間 × 問題数」（テストでは試験ごとの時間）から減らしていき、
+    // 0 になったら採点する。制限なしなら経過時間
+    const limitMs = settings.totalMs || (settings.timeLimit || 0) * 1000 * questions.length;
     const startAt = performance.now();
+    let warned = false;
+    playSound("start");
     const tick = (now) => {
       const elapsed = now - startAt;
       if (limitMs) {
         const remain = limitMs - elapsed;
         timeLabel.textContent = `残り ${formatTime(remain)}`;
-        timeLabel.classList.toggle("low", remain <= Math.min(60000, limitMs * 0.2));
+        const low = remain <= Math.min(5 * 60000, limitMs * 0.1);
+        timeLabel.classList.toggle("low", low);
+        if (low && !warned) { warned = true; playSound("warn"); }
         if (remain <= 0) { finish(); return; }
       } else {
         timeLabel.textContent = `経過 ${formatTime(elapsed)}`;
@@ -913,6 +920,7 @@
         stopTimer();
         const correct = selected === q.answer;
         results.push({ question: q, selected, correct, order });
+        playSound(correct ? "correct" : "wrong");
 
         choiceBtns.forEach((btn, i) => {
           btn.disabled = true;
@@ -1023,31 +1031,543 @@
       ]);
     });
 
+    // テストのときは、間違えた問題を「1問ずつ答え合わせ」で練習できるようにする
+    const practiceSettings = settings.exam
+      ? { ...DEFAULT_SETTINGS, mode: "instant", timeLimit: 0 }
+      : settings;
+
     return el("section", {}, [
       el("h2", { text: `${source.title} の結果` }),
-      el("div", { class: "card score" }, [
-        el("div", { class: "score-num", text: `${correctCount} / ${results.length}` }),
-        el("div", { class: "score-rate", text: `正答率 ${rate}%` }),
-      ]),
-      el("div", { class: "actions" }, [
-        wrongQuestions.length
-          ? el("button", {
-              class: "primary-btn", type: "button", text: `間違えた${wrongQuestions.length}問をもう一度`,
-              onclick: () => replace(quizScreen, source, wrongQuestions, settings),
-            })
-          : null,
-        el("button", {
-          class: wrongQuestions.length ? "secondary-btn" : "primary-btn", type: "button", text: "同じ問題をもう一度",
-          onclick: () => replace(quizScreen, source, pickQuestions(results.map((r) => r.question), { ...settings, count: 0 }), settings),
-        }),
-        el("button", { class: "secondary-btn", type: "button", text: "設定を変える", onclick: back }),
-      ]),
+      settings.exam
+        ? examScoreCard(settings.exam, results)
+        : el("div", { class: "card score" }, [
+            el("div", { class: "score-num", text: `${correctCount} / ${results.length}` }),
+            el("div", { class: "score-rate", text: `正答率 ${rate}%` }),
+          ]),
+      el("div", { class: "actions" }, settings.exam
+        ? [
+            wrongQuestions.length
+              ? el("button", {
+                  class: "primary-btn", type: "button", text: `間違えた${wrongQuestions.length}問を練習する（1問ずつ答え合わせ）`,
+                  onclick: () => replace(quizScreen, { title: `${source.title}：間違えた問題`, items: wrongQuestions, mixed: true }, wrongQuestions, practiceSettings),
+                })
+              : null,
+            el("button", {
+              class: wrongQuestions.length ? "secondary-btn" : "primary-btn", type: "button", text: "もう一度受験する（問題は選び直し）",
+              onclick: () => startExam(settings.exam, true),
+            }),
+            el("button", { class: "secondary-btn", type: "button", text: "試験の説明に戻る", onclick: back }),
+          ]
+        : [
+            wrongQuestions.length
+              ? el("button", {
+                  class: "primary-btn", type: "button", text: `間違えた${wrongQuestions.length}問をもう一度`,
+                  onclick: () => replace(quizScreen, source, wrongQuestions, settings),
+                })
+              : null,
+            el("button", {
+              class: wrongQuestions.length ? "secondary-btn" : "primary-btn", type: "button", text: "同じ問題をもう一度",
+              onclick: () => replace(quizScreen, source, pickQuestions(results.map((r) => r.question), { ...settings, count: 0 }), settings),
+            }),
+            el("button", { class: "secondary-btn", type: "button", text: "設定を変える", onclick: back }),
+          ]),
       el("h2", { text: "振り返り", class: "section-gap" }),
-      el("p", { class: "lead", text: "★やタグを付けると、ホームの「タグから解く」でまとめて解けます。" }),
+      el("p", { class: "lead", text: "★やタグを付けると、練習の「タグ」からまとめて解けます。" }),
       el("div", { class: "review" }, review),
     ]);
   }
 
-  history.push([homeScreen, []]); // 最初の画面はブラウザの履歴に積まない
+  // ======================================================================
+  // サウンド
+  // 効果音はファイルを使わず、Web Audio API で音を作って鳴らす
+  // ======================================================================
+
+  const SOUND_KEY = "remember.sound";
+  const sound = { game: 60, click: 40, ...loadJSON(SOUND_KEY, {}) }; // 0〜100
+  let audioCtx = null;
+
+  function audio() {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      audioCtx = new Ctx();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  }
+
+  // freq の音を start 秒後から dur 秒間鳴らす
+  function tone(freq, start, dur, volume, type = "sine") {
+    if (volume <= 0) return;
+    const ctx = audio();
+    if (!ctx) return;
+    const t = ctx.currentTime + start;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(volume, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  }
+
+  function playSound(name) {
+    if (name === "click") {
+      tone(1100, 0, 0.05, (sound.click / 100) * 0.2, "triangle");
+      return;
+    }
+    const v = (sound.game / 100) * 0.25;
+    switch (name) {
+      case "correct": tone(784, 0, 0.12, v); tone(1175, 0.1, 0.3, v); break;
+      case "wrong": tone(311, 0, 0.18, v * 0.7, "square"); tone(233, 0.15, 0.35, v * 0.7, "square"); break;
+      case "start": tone(523, 0, 0.12, v); tone(659, 0.12, 0.12, v); tone(784, 0.24, 0.3, v); break;
+      case "finish": tone(784, 0, 0.15, v); tone(659, 0.15, 0.15, v); tone(1047, 0.3, 0.45, v); break;
+      case "warn": tone(988, 0, 0.12, v, "square"); tone(988, 0.2, 0.12, v, "square"); break;
+    }
+  }
+
+  // ボタンなどを押したときのクリック音
+  document.addEventListener("click", (e) => {
+    const target = e.target.closest("button, summary, input[type=checkbox], input[type=radio]");
+    if (target && !target.disabled && !target.dataset.silent) playSound("click");
+  }, true);
+
+  // ======================================================================
+  // カラー
+  // ======================================================================
+
+  const COLOR_KEY = "remember.color";
+  const color = { theme: "auto", accent: "", bg: "", ...loadJSON(COLOR_KEY, {}) };
+
+  function applyColor() {
+    const root = document.documentElement;
+    if (color.theme === "auto") delete root.dataset.theme;
+    else root.dataset.theme = color.theme;
+    if (color.accent) {
+      root.style.setProperty("--accent", color.accent);
+      root.style.setProperty("--accent-soft", `color-mix(in srgb, ${color.accent} 22%, var(--surface))`);
+    } else {
+      root.style.removeProperty("--accent");
+      root.style.removeProperty("--accent-soft");
+    }
+    if (color.bg) root.style.setProperty("--bg", color.bg);
+    else root.style.removeProperty("--bg");
+  }
+  applyColor();
+
+  // 背景色の明るさ（0〜1）。背景に合わせてライト・ダークを自動で切り替えるのに使う
+  function luminance(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  }
+
+  // ======================================================================
+  // タイトル画面
+  // ======================================================================
+
+  function titleScreen() {
+    const menu = [
+      ["練習", "ジャンル・タグを選んで、自分のペースで解く", () => go(homeScreen)],
+      ["テスト", "ITパスポート・基本情報・応用情報の試験をCBT方式で受ける", () => go(examSelectScreen)],
+      ["設定", "サウンド・カラー・問題一覧", () => go(settingsMenuScreen)],
+      ["終了", "ゲームを終了する", quit],
+    ];
+    return el("section", { class: "title-screen" }, [
+      el("h1", { class: "title-logo", text: "remember" }),
+      el("p", { class: "title-sub", text: "IT用語を覚えるクイズ" }),
+      el("div", { class: "title-menu" }, menu.map(([label, desc, onclick], i) =>
+        el("button", { class: `title-btn${i === 0 ? " primary" : ""}`, type: "button", title: desc, onclick }, [
+          el("span", { class: "title-btn-label", text: label }),
+          el("span", { class: "title-btn-desc", text: desc }),
+        ])
+      )),
+    ]);
+  }
+
+  // ブラウザは、ユーザーが自分で開いたタブをページから閉じることを許可していない。
+  // 閉じられなかったときは、閉じ方を案内する画面を出す
+  function quit() {
+    window.close();
+    setTimeout(() => { if (!window.closed) go(quitScreen); }, 300);
+  }
+
+  function quitScreen() {
+    return el("section", { class: "center-screen" }, [
+      el("h2", { text: "ゲームを終了します" }),
+      el("p", { class: "lead", text: "ブラウザの仕組み上、このページからタブを閉じることができませんでした。" }),
+      el("p", { text: "タブの × ボタン、または Ctrl + W（Mac は ⌘ + W）でタブを閉じてください。" }),
+      el("div", { class: "actions narrow" }, [
+        el("button", { class: "secondary-btn", type: "button", text: "タイトルに戻る", onclick: back }),
+      ]),
+    ]);
+  }
+
+  // ======================================================================
+  // テスト（本番と同じ問題数・制限時間で、CBT方式で受験する）
+  // ======================================================================
+
+  const EXAMS = [
+    {
+      id: "ip", name: "ITパスポート試験", level: 1, count: 100, minutes: 120, scoreMax: 1000, pass: 600,
+      fieldPass: 300,
+      rule: "100問・120分。総合評価点が1000点満点中600点以上、かつ ストラテジ系・マネジメント系・テクノロジ系の分野別評価点がそれぞれ1000点満点中300点以上で合格。",
+    },
+    {
+      id: "fe", name: "基本情報技術者試験（科目A）", level: 2, count: 60, minutes: 90, scoreMax: 1000, pass: 600,
+      rule: "科目A：60問・90分。1000点満点中600点以上が合格基準（本番の合格には科目Bも600点以上が必要）。",
+    },
+    {
+      id: "ap", name: "応用情報技術者試験（午前）", level: 3, count: 80, minutes: 150, scoreMax: 100, pass: 60,
+      rule: "午前：80問・150分。100点満点中60点以上が合格基準（本番の合格には午後も60点以上が必要）。",
+    },
+  ];
+
+  // ITパスポートの分野。カテゴリから決める
+  const STRATEGY_CATEGORIES = ["企業活動", "経営戦略", "法務", "技術戦略", "システム戦略"];
+  const MANAGEMENT_CATEGORIES = ["プロジェクトマネジメント", "サービスマネジメント", "システム監査"];
+  const FIELDS = ["ストラテジ系", "マネジメント系", "テクノロジ系"];
+  function fieldOf(item) {
+    if (STRATEGY_CATEGORIES.includes(item.term.category)) return "ストラテジ系";
+    if (MANAGEMENT_CATEGORIES.includes(item.term.category)) return "マネジメント系";
+    return "テクノロジ系";
+  }
+
+  // その試験に出せる問題（情報・テクノロジーの、その難易度の問題）
+  function examPool(exam) {
+    return allItems().filter((i) => i.term.genre === "情報・テクノロジー" && levelOf(i) === exam.level);
+  }
+
+  // 登録問題が本番の問題数より少ないときは、全問を出題し、時間も問題数に合わせて減らす（1問あたりの時間は本番と同じ）
+  function examPlan(exam) {
+    const pool = examPool(exam);
+    const count = Math.min(pool.length, exam.count);
+    const minutes = count === exam.count ? exam.minutes : Math.max(1, Math.ceil((exam.minutes * count) / exam.count));
+    return { pool, count, minutes };
+  }
+
+  function startExam(exam, replaceCurrent = false) {
+    const { pool, count, minutes } = examPlan(exam);
+    const questions = shuffle(pool).slice(0, count);
+    const source = { title: exam.name, items: questions, mixed: true, hideTerm: true };
+    const settings = { ...DEFAULT_SETTINGS, mode: "exam", totalMs: minutes * 60000, exam };
+    (replaceCurrent ? replace : go)(quizScreen, source, questions, settings);
+  }
+
+  function examSelectScreen() {
+    return el("section", {}, [
+      el("h2", { text: "テスト" }),
+      el("p", { class: "lead", text: "受験する試験を選んでください。本番と同じように CBT方式で、最後にまとめて採点します。" }),
+      el("div", { class: "exam-list" }, EXAMS.map((exam) => {
+        const { count, minutes } = examPlan(exam);
+        const short = count < exam.count;
+        return el("div", { class: "card exam-card" }, [
+          el("h3", { class: "exam-name", text: exam.name }),
+          el("p", { class: "exam-rule", text: exam.rule }),
+          el("p", {
+            class: `exam-plan${short ? " short" : ""}`,
+            text: count === 0
+              ? "この難易度の問題がまだ登録されていないため、受験できません。"
+              : short
+                ? `登録されている問題が${count}問のため、${count}問・${minutes}分で出題します（1問あたりの時間は本番と同じ）。`
+                : `${count}問・${minutes}分で出題します。`,
+          }),
+          el("button", {
+            class: "primary-btn", type: "button", text: "受験する", disabled: count === 0,
+            onclick: () => go(examIntroScreen, exam),
+          }),
+        ]);
+      })),
+    ]);
+  }
+
+  // 受験前の説明画面
+  function examIntroScreen(exam) {
+    const { count, minutes } = examPlan(exam);
+    return el("section", {}, [
+      el("h2", { text: exam.name }),
+      el("div", { class: "card exam-intro" }, [
+        el("dl", { class: "exam-facts" }, [
+          el("dt", { text: "問題数" }), el("dd", { text: `${count}問${count < exam.count ? `（本番は${exam.count}問）` : ""}` }),
+          el("dt", { text: "試験時間" }), el("dd", { text: `${minutes}分${count < exam.count ? `（本番は${exam.minutes}分）` : ""}` }),
+          el("dt", { text: "合格基準" }), el("dd", { text: exam.rule }),
+        ]),
+        el("ul", { class: "exam-notes" }, [
+          el("li", { text: "問題はランダムに選ばれ、選択肢の並びも毎回変わります。" }),
+          el("li", { text: "「前の問題」「次の問題」や問題一覧で自由に移動し、答えを何度でも変えられます。" }),
+          el("li", { text: "迷った問題には「後で見直す」を付けておけます。" }),
+          el("li", { text: "「試験終了」を押すか、時間が0になると採点します。" }),
+          el("li", { text: "途中で戻ると、それまでの解答は消えます。" }),
+          el("li", { text: "点数は正答率から計算した目安です（本番は IRT という方式で採点されます）。" }),
+        ]),
+      ]),
+      el("div", { class: "actions" }, [
+        el("button", { class: "primary-btn", type: "button", text: "試験開始", onclick: () => startExam(exam) }),
+      ]),
+    ]);
+  }
+
+  // テストの結果（点数・合否・分野別）
+  function examScoreCard(exam, results) {
+    const score = (rs) => (rs.length ? Math.round((rs.filter((r) => r.correct).length / rs.length) * exam.scoreMax) : null);
+    const total = score(results);
+    const fields = exam.fieldPass
+      ? FIELDS.map((name) => {
+          const rs = results.filter((r) => fieldOf(r.question) === name);
+          return { name, count: rs.length, correct: rs.filter((r) => r.correct).length, score: score(rs) };
+        })
+      : [];
+    // 出題がなかった分野は合否の判定に使わない
+    const fieldsOk = fields.every((f) => f.score === null || f.score >= exam.fieldPass);
+    const passed = total >= exam.pass && fieldsOk;
+    const correctCount = results.filter((r) => r.correct).length;
+
+    return el("div", { class: `card exam-score ${passed ? "pass" : "fail"}` }, [
+      el("div", { class: "exam-verdict", text: passed ? "合格" : "不合格" }),
+      el("div", { class: "score-num", text: `${total}点` }),
+      el("div", { class: "score-rate", text: `${exam.scoreMax}点満点（合格基準 ${exam.pass}点）／ ${correctCount} / ${results.length}問 正解` }),
+      fields.length
+        ? el("table", { class: "field-table" }, [
+            el("thead", {}, el("tr", {}, [el("th", { text: "分野" }), el("th", { text: "正解" }), el("th", { text: "評価点" }), el("th", { text: "基準" })])),
+            el("tbody", {}, fields.map((f) => el("tr", {}, [
+              el("td", { text: f.name }),
+              el("td", { text: f.count ? `${f.correct} / ${f.count}` : "出題なし" }),
+              el("td", { text: f.score === null ? "－" : `${f.score}点` }),
+              el("td", {
+                class: f.score === null ? "" : f.score >= exam.fieldPass ? "ok" : "ng",
+                text: f.score === null ? "－" : f.score >= exam.fieldPass ? "○" : `× ${exam.fieldPass}点未満`,
+              }),
+            ]))),
+          ])
+        : null,
+      el("p", { class: "field-hint", text: "※ 点数は正答率から計算した目安です。" }),
+    ]);
+  }
+
+  // ======================================================================
+  // 設定
+  // ======================================================================
+
+  function settingsMenuScreen() {
+    return el("section", {}, [
+      el("h2", { text: "設定" }),
+      el("p", { class: "lead", text: "項目を選んでください。" }),
+      el("div", { class: "list" }, [
+        listItem("サウンド", "", () => go(soundScreen), { desc: "ゲームの音量・ボタンのクリック音の音量" }),
+        listItem("カラー", "", () => go(colorScreen), { desc: "画面の色（テーマ・アクセントカラー・背景色）" }),
+        listItem("問題一覧", "", () => go(catalogScreen), { desc: "すべての用語と問題を見る" }),
+        listItem("実績", "準備中", null, { desc: "これまでの記録", disabled: true }),
+        listItem("お問い合わせ", "準備中", null, { desc: "不具合の報告・ご意見", disabled: true }),
+      ]),
+    ]);
+  }
+
+  function soundScreen() {
+    function slider(key, label, desc, testSound) {
+      const value = el("span", { class: "range-value", text: `${sound[key]}` });
+      const input = el("input", { type: "range", min: 0, max: 100, step: 5, value: sound[key], "aria-label": label });
+      input.addEventListener("input", () => {
+        sound[key] = Number(input.value);
+        value.textContent = `${sound[key]}`;
+        saveJSON(SOUND_KEY, sound);
+      });
+      input.addEventListener("change", () => playSound(testSound));
+      return el("div", { class: "field" }, [
+        el("span", { class: "field-label", text: label }),
+        el("div", { class: "range-row" }, [
+          input,
+          value,
+          el("button", { class: "small-btn", type: "button", text: "試しに鳴らす", "data-silent": "1", onclick: () => playSound(testSound) }),
+        ]),
+        el("p", { class: "field-hint", text: desc }),
+      ]);
+    }
+    return el("section", {}, [
+      el("h2", { text: "サウンド" }),
+      el("p", { class: "lead", text: "0 にすると音が鳴らなくなります。設定は自動で保存されます。" }),
+      el("div", { class: "card" }, [
+        slider("game", "ゲームの音量", "正解・不正解、試験の開始・終了、残り時間が少なくなったときの音。", "correct"),
+        slider("click", "クリック音の音量", "ボタンなどを押したときの音。", "click"),
+      ]),
+    ]);
+  }
+
+  function colorScreen() {
+    const ACCENTS = [
+      ["", "標準"], ["#3b6fe0", "青"], ["#1f9d55", "緑"], ["#7c4dff", "紫"],
+      ["#e07b1f", "オレンジ"], ["#d64545", "赤"], ["#d6458f", "ピンク"], ["#0e9aa7", "水色"],
+    ];
+    const BACKGROUNDS = [
+      ["", "標準"], ["#ffffff", "白"], ["#f5f6f8", "明るい灰色"], ["#eef6ee", "うすい緑"], ["#eaf1fb", "うすい青"],
+      ["#fdf6e3", "クリーム"], ["#15171c", "黒に近い灰色"], ["#0f1626", "紺"], ["#000000", "黒"],
+    ];
+    const root = el("section");
+
+    function save() {
+      saveJSON(COLOR_KEY, color);
+      applyColor();
+      render();
+    }
+
+    function swatches(list, current, onPick) {
+      return el("div", { class: "swatches" }, list.map(([value, name]) =>
+        el("button", {
+          type: "button",
+          class: `swatch${value === current ? " active" : ""}${value ? "" : " default"}`,
+          title: name,
+          "aria-label": name,
+          style: value ? `--swatch:${value}` : null,
+          onclick: () => onPick(value),
+        }, value ? null : el("span", { text: "標準" }))
+      ));
+    }
+
+    function picker(current, fallback, onPick) {
+      const input = el("input", { type: "color", value: current || fallback, class: "color-input" });
+      input.addEventListener("change", () => onPick(input.value));
+      return el("label", { class: "inline color-pick" }, [input, "自由に選ぶ"]);
+    }
+
+    function render() {
+      const themeSeg = el("div", { class: "segmented" }, [["auto", "自動（端末に合わせる）"], ["light", "ライト"], ["dark", "ダーク"]].map(([v, label]) =>
+        el("button", {
+          type: "button", class: color.theme === v ? "active" : "", text: label,
+          onclick: () => { color.theme = v; save(); },
+        })
+      ));
+      setChildren(root,
+        el("h2", { text: "カラー" }),
+        el("p", { class: "lead", text: "画面の色を変えられます。設定は自動で保存されます。" }),
+        el("div", { class: "card" }, [
+          el("div", { class: "field" }, [
+            el("span", { class: "field-label", text: "テーマ" }),
+            themeSeg,
+            el("p", { class: "field-hint", text: "文字やボタンなど、画面全体の明るさ。" }),
+          ]),
+          el("div", { class: "field" }, [
+            el("span", { class: "field-label", text: "アクセントカラー（ボタン・選択中の項目・CBT画面の帯の色）" }),
+            swatches(ACCENTS, color.accent, (v) => { color.accent = v; save(); }),
+            picker(color.accent, "#3b6fe0", (v) => { color.accent = v; save(); }),
+          ]),
+          el("div", { class: "field" }, [
+            el("span", { class: "field-label", text: "背景色" }),
+            swatches(BACKGROUNDS, color.bg, (v) => {
+              color.bg = v;
+              if (v) color.theme = luminance(v) < 0.5 ? "dark" : "light"; // 背景に合わせて文字が読める明るさにする
+              save();
+            }),
+            picker(color.bg, "#f5f6f8", (v) => { color.bg = v; color.theme = luminance(v) < 0.5 ? "dark" : "light"; save(); }),
+            el("p", { class: "field-hint", text: "背景色を選ぶと、文字が読みやすいようにテーマも自動で切り替わります。" }),
+          ]),
+          el("div", { class: "color-preview" }, [
+            el("span", { class: "field-label", text: "見本" }),
+            el("div", { class: "cbt" }, [
+              el("div", { class: "cbt-head" }, [el("span", { class: "cbt-num", text: "問1" }), el("span", { class: "cbt-count", text: "/ 10問" })]),
+              el("div", { class: "cbt-body preview-body" }, [
+                el("div", { class: "choices" }, [
+                  (() => { const b = choiceButton(0, "選択中の選択肢", null); b.classList.add("selected"); return b; })(),
+                  choiceButton(1, "ほかの選択肢", null),
+                ]),
+              ]),
+            ]),
+          ]),
+        ]),
+        el("div", { class: "actions" }, [
+          el("button", {
+            class: "secondary-btn", type: "button", text: "標準の色に戻す",
+            onclick: () => { color.theme = "auto"; color.accent = ""; color.bg = ""; save(); },
+          }),
+        ])
+      );
+    }
+
+    render();
+    return root;
+  }
+
+  // 問題一覧：すべての用語と、その問題（正解つき）を見る
+  function catalogScreen() {
+    const listArea = el("div");
+    let query = "";
+
+    function termDetail(term) {
+      const details = el("details", { class: "catalog-term" }, [
+        el("summary", {}, [
+          el("span", { class: "catalog-name", text: term.name }),
+          el("span", { class: "catalog-count", text: `${term.items.length}問` }),
+          term.description ? el("span", { class: "catalog-desc", text: term.description }) : null,
+        ]),
+      ]);
+      // 中身は開いたときに作る（用語が多くても軽く表示するため）
+      details.addEventListener("toggle", () => {
+        if (!details.open || details.dataset.built) return;
+        details.dataset.built = "1";
+        details.append(el("div", { class: "catalog-body" }, [
+          term.explanation ? el("p", { class: "catalog-explain", text: term.explanation }) : null,
+          term.items.length
+            ? el("ol", { class: "catalog-questions" }, term.items.map((q) =>
+                el("li", {}, [
+                  levelBadge(q),
+                  el("p", { class: "q", text: q.question }),
+                  el("ul", { class: "catalog-choices" }, q.choices.map((c, i) =>
+                    el("li", { class: i === q.answer ? "ok" : "" }, [
+                      el("span", { class: "reason-mark", text: i === q.answer ? "○" : "" }),
+                      `${MARKS[i]}　${c}`,
+                    ])
+                  )),
+                  explanationBlock(q) ? el("details", { class: "review-explain" }, [el("summary", { text: "解説を見る" }), explanationBlock(q)]) : null,
+                ])
+              ))
+            : el("p", { class: "field-hint", text: "この用語の問題はまだありません。" }),
+        ]));
+      });
+      return details;
+    }
+
+    function render() {
+      const q = query.trim().toLowerCase();
+      const match = (t) => !q || [t.name, t.description, t.category, ...t.items.map((i) => i.question)].some((s) => s && s.toLowerCase().includes(q));
+      const blocks = [];
+      let termCount = 0;
+      let questionCount = 0;
+      for (const genre of GENRES) {
+        for (const category of genre.categories) {
+          const terms = category.terms.filter(match);
+          if (!terms.length) continue;
+          termCount += terms.length;
+          questionCount += terms.reduce((n, t) => n + t.items.length, 0);
+          blocks.push(el("div", { class: "catalog-category" }, [
+            el("h3", { class: "catalog-heading", text: `${genre.name} ／ ${category.name}` }),
+            ...terms.map(termDetail),
+          ]));
+        }
+      }
+      setChildren(listArea,
+        el("p", { class: "lead", text: `${q ? "検索結果：" : ""}用語 ${termCount}語・問題 ${questionCount}問` }),
+        ...(blocks.length ? blocks : [el("div", { class: "empty", text: "見つかりませんでした。" })])
+      );
+    }
+
+    const search = el("input", { type: "search", class: "search", placeholder: "用語名・説明・問題文で検索", "aria-label": "問題一覧を検索" });
+    search.addEventListener("input", () => { query = search.value; render(); });
+    render();
+    return el("section", {}, [
+      el("h2", { text: "問題一覧" }),
+      search,
+      listArea,
+    ]);
+  }
+
+  // ヘッダーの「remember」を押すとタイトル画面に戻る
+  const headerTitle = document.querySelector(".app-title");
+  headerTitle.title = "タイトルに戻る";
+  headerTitle.addEventListener("click", () => {
+    if (history.length > 1) window.history.go(1 - history.length);
+  });
+
+  history.push([titleScreen, []]); // 最初の画面（タイトル）はブラウザの履歴に積まない
   show();
 })();
