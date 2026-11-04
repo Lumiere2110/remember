@@ -89,7 +89,7 @@
   // 複数の用語に入れた同じ問題はタグを共有する
   for (const term of TERMS) {
     term.items = (term.questions || [])
-      .filter((q) => Array.isArray(q.choices) && q.choices.length === 4 && q.answer >= 0 && q.answer < 4)
+      .filter((q) => Array.isArray(q.choices) && (q.choices.length === 3 || q.choices.length === 4) && Number.isInteger(q.answer) && q.answer >= 0 && q.answer < q.choices.length)
       .map((q) => ({ ...q, term, key: q.question }));
   }
 
@@ -236,7 +236,7 @@
   // ---------- 解説 ----------
 
   // 正解の解説と、選択肢ごとの正誤の理由。order は表示順（order[i] = 元の選択肢番号）
-  function explanationBlock(q, order = [0, 1, 2, 3]) {
+  function explanationBlock(q, order = q.choices.map((_, i) => i)) {
     const reasons = Array.isArray(q.choiceExplanations) ? q.choiceExplanations : [];
     if (!q.explanation && !reasons.some(Boolean)) return null;
     return el("div", { class: "explain" }, [
@@ -673,7 +673,7 @@
       stopTimer();
       const q = questions[index];
       // 選択肢は毎回ランダムに並べる。order[i] = 元の選択肢番号
-      const order = shuffle([0, 1, 2, 3]);
+      const order = shuffle(q.choices.map((_, i) => i));
       let answered = false;
 
       const timerBar = el("div", { class: "timer-bar" });
@@ -761,7 +761,7 @@
     return root;
   }
 
-  // 数字キー 1〜4 / A〜D で回答（ア〜エの順）、Enter で次へ
+  // 数字キー 1〜4 / A〜D で回答（ア〜エの順。3択ならア〜ウ）、Enter で次へ
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.key.length !== 1) return;
     const key = e.key.toUpperCase();
