@@ -34,6 +34,17 @@
 
 * { box-sizing: border-box; }
 
+/* 本文の幅。PC の広い画面では、本文と文字を大きくする */
+:root { --page-width: 720px; }
+@media (min-width: 1100px) {
+  :root { --page-width: 960px; }
+  html { font-size: 18px; }
+}
+@media (min-width: 1600px) {
+  :root { --page-width: 1080px; }
+  html { font-size: 20px; }
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -45,7 +56,7 @@ body {
 button { font: inherit; color: inherit; }
 
 .app-header {
-  height: 56px;
+  height: 3.4rem;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -56,7 +67,7 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  max-width: 720px;
+  max-width: var(--page-width);
   height: 100%;
   margin: 0 auto;
   padding: 0 16px;
@@ -67,18 +78,19 @@ button { font: inherit; color: inherit; }
 
 .back-btn {
   position: absolute;
-  left: 8px;
-  border: none;
+  left: 16px; /* 本文の左端にそろえる */
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: none;
+  background: var(--bg);
   color: var(--accent);
   cursor: pointer;
-  padding: 8px;
+  padding: 4px 12px;
+  font-size: 0.95rem;
 }
-.back-btn:hover { background: var(--accent-soft); }
+.back-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
 
 .app {
-  max-width: 720px;
+  max-width: var(--page-width);
   margin: 0 auto;
   padding: 24px 16px 48px;
 }

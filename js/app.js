@@ -273,10 +273,14 @@
 
   // ---------- 画面遷移 ----------
 
-  // ブラウザの履歴とも連動させ、マウスの戻るボタンや Alt+← でも一つ前の画面に戻れるようにする。
-  // ブラウザ側の履歴には「何画面目か」(depth) を持たせておく
+  // ブラウザの履歴とも連動させ、マウスのボタン4・5（戻る・進む）や Alt+←・Alt+→ でも画面を移動できるようにする。
+  // ブラウザ側の履歴には「何画面目か」(depth) を持たせておく。
+  // 戻った画面は forwardScreens に取っておき、「進む」で復元する
+  let forwardScreens = [];
+
   function go(screen, ...args) {
     history.push([screen, args]);
+    forwardScreens = []; // 新しい画面に進んだら、それより先の「進む」先は消える
     window.history.pushState({ depth: history.length }, "");
     show();
   }
@@ -288,13 +292,18 @@
   window.history.replaceState({ depth: 1 }, "");
   window.addEventListener("popstate", (e) => {
     const depth = (e.state && e.state.depth) || 1;
-    if (depth > history.length) {
-      // 「進む」は戻した画面を復元できないので取り消す
-      window.history.go(history.length - depth);
-      return;
-    }
     if (depth === history.length) return;
-    history.splice(Math.max(depth, 1));
+    if (depth < history.length) {
+      forwardScreens = history.splice(Math.max(depth, 1)).concat(forwardScreens);
+    } else {
+      const need = depth - history.length;
+      if (forwardScreens.length < need) {
+        // 復元できる画面がない（再読み込みした後など）ときは、進んだのを取り消す
+        window.history.go(history.length - depth);
+        return;
+      }
+      history.push(...forwardScreens.splice(0, need));
+    }
     show();
   });
 
