@@ -1,10 +1,11 @@
 (() => {
   "use strict";
 
-  const GENRES = window.GENRES || [];
   const TERMS = window.TERMS || [];
-  const MARKS = ["A", "B", "C", "D"];
+  const MARKS = ["ア", "イ", "ウ", "エ"];
   const SETTINGS_KEY = "remember.settings";
+  const TAGS_KEY = "remember.tags";
+  const FAVORITE = "お気に入り";
 
   const TIME_OPTIONS = [0, 10, 20, 30, 60]; // 0 = 制限なし
   const DEFAULT_SETTINGS = { timeLimit: 0, count: 0, order: "sequential", shuffleChoices: false };
@@ -15,6 +16,7 @@
   // 画面の履歴。戻るボタンで一つ前の画面に戻る
   const history = [];
   let timerId = null;
+  let searchQuery = "";
 
   // ---------- ユーティリティ ----------
 
@@ -34,6 +36,11 @@
     return node;
   }
 
+  // replaceChildren は null を "null" という文字で表示してしまうので取り除いてから入れる
+  function setChildren(node, ...children) {
+    node.replaceChildren(...children.filter((c) => c != null));
+  }
+
   function shuffle(array) {
     const a = array.slice();
     for (let i = a.length - 1; i > 0; i--) {
@@ -43,36 +50,141 @@
     return a;
   }
 
-  function loadSettings() {
+  function loadJSON(key, fallback) {
     try {
-      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
-      return { ...DEFAULT_SETTINGS, ...saved };
+      return JSON.parse(localStorage.getItem(key)) ?? fallback;
     } catch {
-      return { ...DEFAULT_SETTINGS };
+      return fallback;
     }
   }
 
-  function saveSettings(settings) {
+  function saveJSON(key, value) {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      localStorage.setItem(key, JSON.stringify(value));
     } catch {
       // 保存できなくてもゲームは続けられる
     }
   }
 
-  function validQuestions(term) {
-    return (term.questions || []).filter(
-      (q) => Array.isArray(q.choices) && q.choices.length === 4 && q.answer >= 0 && q.answer < 4
-    );
-  }
-
-  function termsOf(genreId, categoryId) {
-    return TERMS.filter((t) => t.genre === genreId && (!categoryId || t.category === categoryId));
-  }
-
   function stopTimer() {
     if (timerId) cancelAnimationFrame(timerId);
     timerId = null;
+  }
+
+  // ---------- データ ----------
+
+  // 問題に用語と識別キーを持たせる。キーは用語名＋問題文なので、並び替えてもタグが外れない
+  for (const term of TERMS) {
+    term.items = (term.questions || [])
+      .filter((q) => Array.isArray(q.choices) && q.choices.length === 4 && q.answer >= 0 && q.answer < 4)
+      .map((q) => ({ ...q, term, key: `${term.name}::${q.question}` }));
+  }
+
+  // ジャンル → カテゴリ → 用語 の木を、用語に書かれた名前から作る
+  const GENRES = [];
+  for (const term of TERMS) {
+    let genre = GENRES.find((g) => g.name === term.genre);
+    if (!genre) GENRES.push((genre = { name: term.genre, categories: [] }));
+    let category = genre.categories.find((c) => c.name === term.category);
+    if (!category) genre.categories.push((category = { name: term.category, terms: [] }));
+    category.terms.push(term);
+  }
+
+  const allItems = () => TERMS.flatMap((t) => t.items);
+
+  // ---------- タグ ----------
+  // ユーザーが付けたタグはブラウザに保存する。terms.js の tags は固定タグとして常に付く
+
+  const userTags = loadJSON(TAGS_KEY, {});
+
+  function tagsOf(item) {
+    return [...new Set([...(item.tags || []), ...(userTags[item.key] || [])])];
+  }
+
+  function hasTag(item, tag) {
+    return tagsOf(item).includes(tag);
+  }
+
+  function toggleTag(item, tag) {
+    const list = userTags[item.key] || [];
+    userTags[item.key] = list.includes(tag) ? list.filter((t) => t !== tag) : [...list, tag];
+    if (!userTags[item.key].length) delete userTags[item.key];
+    saveJSON(TAGS_KEY, userTags);
+  }
+
+  // お気に入りを先頭に、使われているタグを並べる
+  function allTagNames() {
+    const names = new Set([FAVORITE]);
+    for (const item of allItems()) tagsOf(item).forEach((t) => names.add(t));
+    return [...names];
+  }
+
+  // 問題に付いているタグの表示と編集。onChange はタグが変わったときに呼ばれる
+  function tagEditor(item, onChange) {
+    const wrap = el("div", { class: "tag-editor" });
+
+    function render() {
+      const fixed = item.tags || [];
+      const chips = allTagNames().map((tag) => {
+        const active = hasTag(item, tag);
+        const locked = fixed.includes(tag);
+        return el("button", {
+          type: "button",
+          class: `tag-chip ${active ? "active" : ""} ${tag === FAVORITE ? "fav" : ""}`,
+          disabled: locked,
+          title: locked ? "最初から付いているタグ" : active ? "タグを外す" : "タグを付ける",
+          text: tag === FAVORITE ? `${active ? "★" : "☆"} ${tag}` : `# ${tag}`,
+          onclick: () => { toggleTag(item, tag); render(); onChange?.(); },
+        });
+      });
+      const input = el("input", { type: "text", class: "tag-input", placeholder: "＋ 新しいタグ", maxlength: 20 });
+      input.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" || e.isComposing) return;
+        const tag = input.value.trim();
+        if (tag && !hasTag(item, tag)) {
+          toggleTag(item, tag);
+          render();
+          onChange?.();
+          wrap.querySelector(".tag-input").focus();
+        }
+      });
+      wrap.replaceChildren(...chips, input);
+    }
+
+    render();
+    return wrap;
+  }
+
+  // ---------- 解説 ----------
+
+  // 正解の解説と、選択肢ごとの正誤の理由。order は表示順（order[i] = 元の選択肢番号）
+  function explanationBlock(q, order = [0, 1, 2, 3]) {
+    const reasons = Array.isArray(q.choiceExplanations) ? q.choiceExplanations : [];
+    if (!q.explanation && !reasons.some(Boolean)) return null;
+    return el("div", { class: "explain" }, [
+      el("p", { class: "explain-title", text: "解説" }),
+      q.explanation ? el("p", { text: q.explanation }) : null,
+      reasons.some(Boolean)
+        ? el("ul", { class: "choice-reasons" }, order.map((orig, i) => {
+            const ok = orig === q.answer;
+            return el("li", { class: ok ? "ok" : "ng" }, [
+              el("span", { class: "reason-head" }, [
+                el("span", { class: "reason-mark", text: ok ? "○" : "×" }),
+                `${MARKS[i]}　${q.choices[orig]}`,
+              ]),
+              reasons[orig] ? el("span", { class: "reason-text", text: reasons[orig] }) : null,
+            ]);
+          }))
+        : null,
+    ]);
+  }
+
+  function termExplanation(term, open) {
+    if (!term || !term.explanation) return null;
+    return el("details", { class: "term-explain", open }, [
+      el("summary", { text: `用語の解説：${term.name}` }),
+      el("p", { text: term.explanation }),
+    ]);
   }
 
   // ---------- 画面遷移 ----------
@@ -87,6 +199,11 @@
     show();
   }
 
+  function replace(screen, ...args) {
+    history.splice(-1, 1, [screen, args]);
+    show();
+  }
+
   function show() {
     stopTimer();
     const [screen, args] = history[history.length - 1];
@@ -97,66 +214,108 @@
 
   backBtn.addEventListener("click", back);
 
-  // ---------- ジャンル選択 ----------
-
-  function genreScreen() {
-    const items = GENRES.map((g) => {
-      const count = termsOf(g.id).length;
-      return el("button", { class: "list-item", type: "button", onclick: () => go(categoryScreen, g) }, [
-        el("span", { text: g.name }),
-        el("span", { class: "sub", text: `${g.categories.length}カテゴリ・${count}語` }),
-      ]);
-    });
-    return el("section", {}, [
-      el("h2", { text: "ジャンルを選ぶ" }),
-      el("p", { class: "lead", text: "用語のジャンルを選んでください。" }),
-      items.length ? el("div", { class: "list" }, items) : el("div", { class: "empty", text: "ジャンルがまだありません。" }),
+  function listItem(label, sub, onclick, { desc, disabled } = {}) {
+    return el("button", { class: "list-item", type: "button", disabled, onclick }, [
+      el("span", {}, [label, desc ? el("span", { class: "desc", text: desc }) : null]),
+      el("span", { class: "sub", text: sub }),
     ]);
   }
 
-  // ---------- カテゴリ選択 ----------
+  function termItem(term, showPath) {
+    const n = term.items.length;
+    return listItem(term.name, `${n}問`, () => go(settingsScreen, { title: term.name, items: term.items, term }), {
+      desc: [showPath ? `${term.genre} ／ ${term.category}` : null, term.description].filter(Boolean).join("　"),
+      disabled: n === 0,
+    });
+  }
+
+  // ---------- ホーム（検索・ジャンル・タグ） ----------
+
+  function homeScreen() {
+    const results = el("div");
+
+    function renderResults() {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) {
+        setChildren(results, genreSection(), tagSection());
+        return;
+      }
+      const hits = TERMS.filter((t) =>
+        [t.name, t.description, t.genre, t.category].some((s) => s && s.toLowerCase().includes(q))
+      );
+      results.replaceChildren(
+        el("h2", { text: "検索結果" }),
+        el("p", { class: "lead", text: `「${searchQuery.trim()}」に一致する用語：${hits.length}件` }),
+        hits.length
+          ? el("div", { class: "list" }, hits.map((t) => termItem(t, true)))
+          : el("div", { class: "empty", text: "見つかりませんでした。" })
+      );
+    }
+
+    const search = el("input", {
+      type: "search", class: "search", placeholder: "用語を検索", value: searchQuery, "aria-label": "用語を検索",
+    });
+    search.addEventListener("input", () => { searchQuery = search.value; renderResults(); });
+
+    renderResults();
+    return el("section", {}, [search, results]);
+  }
+
+  function genreSection() {
+    return el("div", {}, [
+      el("h2", { text: "ジャンルを選ぶ" }),
+      el("p", { class: "lead", text: "用語のジャンルを選んでください。" }),
+      GENRES.length
+        ? el("div", { class: "list" }, GENRES.map((g) => {
+            const count = g.categories.reduce((n, c) => n + c.terms.length, 0);
+            return listItem(g.name, `${g.categories.length}カテゴリ・${count}語`, () => go(categoryScreen, g));
+          }))
+        : el("div", { class: "empty", text: "用語がまだありません。data/terms.js に追加してください。" }),
+    ]);
+  }
+
+  function tagSection() {
+    const items = allItems();
+    const tags = allTagNames().map((tag) => [tag, items.filter((i) => hasTag(i, tag))]);
+    if (!items.length) return null;
+    return el("div", { class: "section-gap" }, [
+      el("h2", { text: "タグから解く" }),
+      el("p", { class: "lead", text: "タグを付けた問題を、用語をまたいでまとめて解けます。" }),
+      el("div", { class: "list" }, tags.map(([tag, list]) =>
+        listItem(tag === FAVORITE ? `★ ${tag}` : `# ${tag}`, `${list.length}問`,
+          () => go(settingsScreen, { title: tag === FAVORITE ? `★ ${tag}` : `# ${tag}`, items: list, mixed: true }),
+          { disabled: list.length === 0 })
+      )),
+    ]);
+  }
+
+  // ---------- カテゴリ・用語選択 ----------
 
   function categoryScreen(genre) {
-    const items = genre.categories.map((c) => {
-      const count = termsOf(genre.id, c.id).length;
-      return el("button", { class: "list-item", type: "button", onclick: () => go(termScreen, genre, c) }, [
-        el("span", { text: c.name }),
-        el("span", { class: "sub", text: `${count}語` }),
-      ]);
-    });
     return el("section", {}, [
       el("h2", { text: genre.name }),
       el("p", { class: "lead", text: "カテゴリを選んでください。" }),
-      el("div", { class: "list" }, items),
+      el("div", { class: "list" }, genre.categories.map((c) =>
+        listItem(c.name, `${c.terms.length}語`, () => go(termScreen, genre, c))
+      )),
     ]);
   }
 
-  // ---------- 用語選択 ----------
-
   function termScreen(genre, category) {
-    const terms = termsOf(genre.id, category.id);
-    const items = terms.map((t) => {
-      const n = validQuestions(t).length;
-      return el("button", { class: "list-item", type: "button", disabled: n === 0, onclick: () => go(settingsScreen, t) }, [
-        el("span", {}, [t.name, t.description ? el("span", { class: "desc", text: t.description }) : null]),
-        el("span", { class: "sub", text: `${n}問` }),
-      ]);
-    });
     return el("section", {}, [
       el("h2", { text: category.name }),
       el("p", { class: "lead", text: `${genre.name} ／ 用語を選んでください。` }),
-      items.length
-        ? el("div", { class: "list" }, items)
-        : el("div", { class: "empty", text: "このカテゴリにはまだ用語がありません。data/terms.js に追加してください。" }),
+      el("div", { class: "list" }, category.terms.map((t) => termItem(t, false))),
     ]);
   }
 
   // ---------- 設定 ----------
+  // source = { title, items, mixed }。mixed は複数の用語の問題が混ざっているとき
 
-  function settingsScreen(term) {
-    const questions = validQuestions(term);
-    const settings = loadSettings();
-    if (settings.count > questions.length) settings.count = 0;
+  function settingsScreen(source) {
+    const settings = { ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) };
+    let tagFilter = null; // null = すべて
+    const filtered = () => (tagFilter ? source.items.filter((i) => hasTag(i, tagFilter)) : source.items);
 
     function segmented(options, current, onSelect) {
       const wrap = el("div", { class: "segmented" });
@@ -171,6 +330,21 @@
       }
       return wrap;
     }
+
+    const lead = el("p", { class: "lead" });
+
+    // タグで絞り込み（用語から来たときだけ。タグから来たときは絞り込み済み）
+    const usedTags = source.mixed ? [] : allTagNames().filter((t) => source.items.some((i) => hasTag(i, t)));
+    const tagField = usedTags.length
+      ? el("div", { class: "field" }, [
+          el("span", { class: "field-label", text: "出題する問題" }),
+          segmented(
+            [[null, "すべて"], ...usedTags.map((t) => [t, t === FAVORITE ? `★ ${t}` : `# ${t}`])],
+            null,
+            (v) => { tagFilter = v; updateCount(); }
+          ),
+        ])
+      : null;
 
     // 回答時間
     const customTime = el("input", {
@@ -192,13 +366,20 @@
     });
 
     // 問題数
-    const countInput = el("input", {
-      type: "number", min: 1, max: questions.length,
-      value: settings.count || questions.length,
-    });
+    const countInput = el("input", { type: "number", min: 1 });
+    const countTotal = el("span");
     const allCheck = el("input", { type: "checkbox", checked: settings.count === 0 });
-    countInput.disabled = settings.count === 0;
     allCheck.addEventListener("change", () => { countInput.disabled = allCheck.checked; });
+
+    function updateCount() {
+      const n = filtered().length;
+      lead.textContent = `全${n}問 ／ 出題の設定をしてください。`;
+      countInput.max = n;
+      countInput.value = Math.min(settings.count || n, n);
+      countInput.disabled = allCheck.checked;
+      countTotal.textContent = `問 ／ ${n}問`;
+      startBtn.disabled = n === 0;
+    }
 
     // 出題順
     const orderSeg = segmented(
@@ -210,21 +391,24 @@
     const shuffleCheck = el("input", { type: "checkbox", checked: settings.shuffleChoices });
 
     function start() {
+      const items = filtered();
       settings.count = allCheck.checked
         ? 0
-        : Math.min(questions.length, Math.max(1, parseInt(countInput.value, 10) || questions.length));
+        : Math.min(items.length, Math.max(1, parseInt(countInput.value, 10) || items.length));
       settings.shuffleChoices = shuffleCheck.checked;
-      saveSettings(settings);
-
-      let list = settings.order === "random" ? shuffle(questions) : questions.slice();
-      if (settings.count) list = list.slice(0, settings.count);
-      go(quizScreen, term, list, settings);
+      saveJSON(SETTINGS_KEY, settings);
+      go(quizScreen, source, pickQuestions(items, settings), settings);
     }
 
+    const startBtn = el("button", { class: "primary-btn", type: "button", text: "スタート", onclick: start });
+    updateCount();
+
     return el("section", {}, [
-      el("h2", { text: term.name }),
-      el("p", { class: "lead", text: `全${questions.length}問 ／ 出題の設定をしてください。` }),
+      el("h2", { text: source.title }),
+      lead,
+      termExplanation(source.term, true),
       el("div", { class: "card" }, [
+        tagField,
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "回答時間（1問あたり）" }),
           timeSeg,
@@ -232,11 +416,7 @@
         ]),
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "問題数" }),
-          el("div", { class: "inline" }, [
-            el("label", { class: "check" }, [allCheck, "全問"]),
-            countInput,
-            `問 ／ ${questions.length}問`,
-          ]),
+          el("div", { class: "inline" }, [el("label", { class: "check" }, [allCheck, "全問"]), countInput, countTotal]),
         ]),
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "出題順" }),
@@ -246,15 +426,18 @@
           el("label", { class: "check" }, [shuffleCheck, "選択肢の並びをシャッフルする"]),
         ]),
       ]),
-      el("div", { class: "actions" }, [
-        el("button", { class: "primary-btn", type: "button", text: "スタート", onclick: start }),
-      ]),
+      el("div", { class: "actions" }, [startBtn]),
     ]);
+  }
+
+  function pickQuestions(items, settings) {
+    const list = settings.order === "random" ? shuffle(items) : items.slice();
+    return settings.count ? list.slice(0, settings.count) : list;
   }
 
   // ---------- クイズ ----------
 
-  function quizScreen(term, questions, settings) {
+  function quizScreen(source, questions, settings) {
     const results = [];
     let index = 0;
     const root = el("section");
@@ -291,12 +474,14 @@
 
         const title = correct ? "正解！" : selected === null ? "時間切れ" : "不正解";
         const isLast = index === questions.length - 1;
-        feedbackArea.replaceChildren(
+        setChildren(
+          feedbackArea,
           el("div", { class: `feedback ${correct ? "correct" : "wrong"}` }, [
             el("p", { class: "feedback-title", text: title }),
             correct ? null : el("p", { text: `正解：${q.choices[q.answer]}` }),
-            q.explanation ? el("p", { text: q.explanation }) : null,
           ]),
+          explanationBlock(q, order),
+          termExplanation(q.term, false),
           el("div", { class: "actions" }, [
             el("button", {
               class: "primary-btn", type: "button",
@@ -304,8 +489,7 @@
               onclick: () => {
                 if (isLast) {
                   // 戻るで結果からクイズに戻らないよう、履歴を差し替える
-                  history.splice(-1, 1, [resultScreen, [term, results, settings]]);
-                  show();
+                  replace(resultScreen, source, results, settings);
                 } else {
                   index++;
                   render();
@@ -317,14 +501,16 @@
         feedbackArea.querySelector(".primary-btn").focus();
       }
 
-      root.replaceChildren(
+      setChildren(
+        root,
         el("div", { class: "quiz-top" }, [
-          el("span", { text: `${term.name}　${index + 1} / ${questions.length}` }),
+          el("span", { text: `${source.mixed ? q.term.name : source.title}　${index + 1} / ${questions.length}` }),
           timeLabel,
         ]),
         settings.timeLimit ? el("div", { class: "timer" }, [timerBar]) : null,
         el("p", { class: "question-text", text: q.question }),
         el("div", { class: "choices" }, choiceBtns),
+        tagEditor(q),
         feedbackArea
       );
 
@@ -347,65 +533,61 @@
     return root;
   }
 
-  // 数字キー 1〜4 / A〜D で回答、Enter で次へ
+  // 数字キー 1〜4 / A〜D で回答（ア〜エの順）、Enter で次へ
   document.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "INPUT") return;
+    if (e.target.tagName === "INPUT" || e.key.length !== 1) return;
     const key = e.key.toUpperCase();
-    const i = "1234".indexOf(key) >= 0 ? "1234".indexOf(key) : MARKS.indexOf(key);
+    const i = "1234".includes(key) ? "1234".indexOf(key) : "ABCD".indexOf(key);
     const choices = app.querySelectorAll(".choice");
     if (i >= 0 && choices[i] && !choices[i].disabled) choices[i].click();
   });
 
   // ---------- 結果 ----------
 
-  function resultScreen(term, results, settings) {
+  function resultScreen(source, results, settings) {
     const correctCount = results.filter((r) => r.correct).length;
     const wrongQuestions = results.filter((r) => !r.correct).map((r) => r.question);
     const rate = Math.round((correctCount / results.length) * 100);
 
-    const review = results.map((r) =>
-      el("div", { class: `review-item ${r.correct ? "" : "wrong"}` }, [
-        el("p", { class: "q", text: `${r.correct ? "○" : "×"} ${r.question.question}` }),
+    const review = results.map((r) => {
+      const q = r.question;
+      return el("div", { class: `review-item ${r.correct ? "" : "wrong"}` }, [
+        el("p", { class: "q", text: `${r.correct ? "○" : "×"} ${q.question}` }),
         el("p", {
           class: "a",
           text: r.correct
-            ? `正解：${r.question.choices[r.question.answer]}`
-            : `あなたの回答：${r.selected === null ? "時間切れ" : r.question.choices[r.selected]} ／ 正解：${r.question.choices[r.question.answer]}`,
+            ? `正解：${q.choices[q.answer]}`
+            : `あなたの回答：${r.selected === null ? "時間切れ" : q.choices[r.selected]} ／ 正解：${q.choices[q.answer]}`,
         }),
-      ])
-    );
-
-    // 戻るでクイズではなく設定画面に戻れるよう、履歴の結果画面を差し替えて遷移する
-    function replay(questions) {
-      history.splice(-1, 1, [quizScreen, [term, questions, settings]]);
-      show();
-    }
+        explanationBlock(q) ? el("details", { class: "review-explain" }, [el("summary", { text: "解説を見る" }), explanationBlock(q)]) : null,
+        tagEditor(q),
+      ]);
+    });
 
     return el("section", {}, [
-      el("h2", { text: `${term.name} の結果` }),
+      el("h2", { text: `${source.title} の結果` }),
       el("div", { class: "card score" }, [
         el("div", { class: "score-num", text: `${correctCount} / ${results.length}` }),
         el("div", { class: "score-rate", text: `正答率 ${rate}%` }),
       ]),
       el("div", { class: "actions" }, [
         wrongQuestions.length
-          ? el("button", { class: "primary-btn", type: "button", text: `間違えた${wrongQuestions.length}問をもう一度`, onclick: () => replay(wrongQuestions) })
+          ? el("button", {
+              class: "primary-btn", type: "button", text: `間違えた${wrongQuestions.length}問をもう一度`,
+              onclick: () => replace(quizScreen, source, wrongQuestions, settings),
+            })
           : null,
         el("button", {
-          class: wrongQuestions.length ? "secondary-btn" : "primary-btn", type: "button", text: "同じ設定でもう一度",
-          onclick: () => {
-            const all = validQuestions(term);
-            let list = settings.order === "random" ? shuffle(all) : all.slice();
-            if (settings.count) list = list.slice(0, settings.count);
-            replay(list);
-          },
+          class: wrongQuestions.length ? "secondary-btn" : "primary-btn", type: "button", text: "同じ問題をもう一度",
+          onclick: () => replace(quizScreen, source, pickQuestions(results.map((r) => r.question), { ...settings, count: 0 }), settings),
         }),
         el("button", { class: "secondary-btn", type: "button", text: "設定を変える", onclick: back }),
       ]),
-      el("h2", { text: "振り返り", style: "margin-top:28px" }),
+      el("h2", { text: "振り返り", class: "section-gap" }),
+      el("p", { class: "lead", text: "★やタグを付けると、ホームの「タグから解く」でまとめて解けます。" }),
       el("div", { class: "review" }, review),
     ]);
   }
 
-  go(genreScreen);
+  go(homeScreen);
 })();
