@@ -8,7 +8,7 @@
   const FAVORITE = "お気に入り";
 
   const TIME_OPTIONS = [0, 10, 20, 30, 60]; // 0 = 制限なし
-  const DEFAULT_SETTINGS = { timeLimit: 0, count: 0, order: "sequential", shuffleChoices: false };
+  const DEFAULT_SETTINGS = { timeLimit: 0, count: 0, order: "sequential" };
 
   const app = document.getElementById("app");
   const backBtn = document.getElementById("back-btn");
@@ -388,14 +388,11 @@
       (v) => { settings.order = v; }
     );
 
-    const shuffleCheck = el("input", { type: "checkbox", checked: settings.shuffleChoices });
-
     function start() {
       const items = filtered();
       settings.count = allCheck.checked
         ? 0
         : Math.min(items.length, Math.max(1, parseInt(countInput.value, 10) || items.length));
-      settings.shuffleChoices = shuffleCheck.checked;
       saveJSON(SETTINGS_KEY, settings);
       go(quizScreen, source, pickQuestions(items, settings), settings);
     }
@@ -421,9 +418,7 @@
         el("div", { class: "field" }, [
           el("span", { class: "field-label", text: "出題順" }),
           orderSeg,
-        ]),
-        el("div", { class: "field" }, [
-          el("label", { class: "check" }, [shuffleCheck, "選択肢の並びをシャッフルする"]),
+          el("p", { class: "field-hint", text: "選択肢の並びは毎回ランダムです。" }),
         ]),
       ]),
       el("div", { class: "actions" }, [startBtn]),
@@ -445,8 +440,8 @@
     function render() {
       stopTimer();
       const q = questions[index];
-      // 表示順を作る。order[i] = 元の選択肢番号
-      const order = settings.shuffleChoices ? shuffle([0, 1, 2, 3]) : [0, 1, 2, 3];
+      // 選択肢は毎回ランダムに並べる。order[i] = 元の選択肢番号
+      const order = shuffle([0, 1, 2, 3]);
       let answered = false;
 
       const timerBar = el("div", { class: "timer-bar" });
@@ -464,7 +459,7 @@
         answered = true;
         stopTimer();
         const correct = selected === q.answer;
-        results.push({ question: q, selected, correct });
+        results.push({ question: q, selected, correct, order });
 
         choiceBtns.forEach((btn, i) => {
           btn.disabled = true;
@@ -559,7 +554,9 @@
             ? `正解：${q.choices[q.answer]}`
             : `あなたの回答：${r.selected === null ? "時間切れ" : q.choices[r.selected]} ／ 正解：${q.choices[q.answer]}`,
         }),
-        explanationBlock(q) ? el("details", { class: "review-explain" }, [el("summary", { text: "解説を見る" }), explanationBlock(q)]) : null,
+        explanationBlock(q)
+          ? el("details", { class: "review-explain" }, [el("summary", { text: "解説を見る" }), explanationBlock(q, r.order)])
+          : null,
         tagEditor(q),
       ]);
     });
