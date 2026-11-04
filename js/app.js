@@ -94,13 +94,18 @@
   }
 
   // ジャンル → カテゴリ → 用語 の木を、用語に書かれた名前から作る
+  // 用語がまだないジャンル・カテゴリは terms.js の CATEGORIES に書いておくと（用語のあるものの後ろに）表示される
   const GENRES = [];
-  for (const term of TERMS) {
-    let genre = GENRES.find((g) => g.name === term.genre);
-    if (!genre) GENRES.push((genre = { name: term.genre, categories: [] }));
-    let category = genre.categories.find((c) => c.name === term.category);
-    if (!category) genre.categories.push((category = { name: term.category, terms: [] }));
-    category.terms.push(term);
+  function findOrAdd(genreName, categoryName) {
+    let genre = GENRES.find((g) => g.name === genreName);
+    if (!genre) GENRES.push((genre = { name: genreName, categories: [] }));
+    let category = genre.categories.find((c) => c.name === categoryName);
+    if (!category) genre.categories.push((category = { name: categoryName, terms: [] }));
+    return category;
+  }
+  for (const term of TERMS) findOrAdd(term.genre, term.category).terms.push(term);
+  for (const entry of window.CATEGORIES || []) {
+    for (const name of entry.categories || []) findOrAdd(entry.genre, name);
   }
 
   function levelOf(item) {
@@ -506,7 +511,9 @@
     return el("section", {}, [
       el("h2", { text: category.name }),
       el("p", { class: "lead", text: `${genre.name} ／ 用語を選んでください。` }),
-      el("div", { class: "list" }, category.terms.map((t) => termItem(t, false))),
+      category.terms.length
+        ? el("div", { class: "list" }, category.terms.map((t) => termItem(t, false)))
+        : el("div", { class: "empty", text: "このカテゴリにはまだ用語がありません。" }),
     ]);
   }
 

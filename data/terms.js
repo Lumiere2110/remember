@@ -31,6 +31,13 @@
 // },
 //
 // 複数の用語に入れたい問題は、下の SHARED に一度だけ書き、各用語の questions に SHARED.名前 で入れる。
+//
+// 用語がまだないジャンル・カテゴリを先に作っておきたいときは、下の CATEGORIES に書く。
+// 用語を追加すれば、CATEGORIES に書いていなくてもジャンル・カテゴリは自動で作られる。
+
+window.CATEGORIES = [
+  { genre: "物理", categories: ["電気・電子"] },
+];
 
 const SHARED = {
   // IPアドレス・サブネットマスク

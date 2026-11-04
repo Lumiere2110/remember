@@ -76,4 +76,12 @@ window.TERMS = [
 同じ問題を複数の用語に入れたいときは、`terms.js` 上部の `SHARED` に一度だけ書き、各用語の `questions` に `SHARED.名前` で入れます。
 付けたタグはどの用語から解いても共通です。
 
+用語がまだないジャンル・カテゴリを先に作るときは、`terms.js` の `CATEGORIES` に書きます。
+
+```js
+window.CATEGORIES = [
+  { genre: "物理", categories: ["電気・電子"] },
+];
+```
+
 選択肢は4つ（4択）か3つ（3択）。それ以外の数の問題や `answer` が範囲外の問題は出題されません。
