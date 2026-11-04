@@ -273,15 +273,30 @@
 
   // ---------- 画面遷移 ----------
 
+  // ブラウザの履歴とも連動させ、マウスの戻るボタンや Alt+← でも一つ前の画面に戻れるようにする。
+  // ブラウザ側の履歴には「何画面目か」(depth) を持たせておく
   function go(screen, ...args) {
     history.push([screen, args]);
+    window.history.pushState({ depth: history.length }, "");
     show();
   }
 
   function back() {
-    history.pop();
-    show();
+    if (history.length > 1) window.history.back(); // 実際に戻すのは popstate
   }
+
+  window.history.replaceState({ depth: 1 }, "");
+  window.addEventListener("popstate", (e) => {
+    const depth = (e.state && e.state.depth) || 1;
+    if (depth > history.length) {
+      // 「進む」は戻した画面を復元できないので取り消す
+      window.history.go(history.length - depth);
+      return;
+    }
+    if (depth === history.length) return;
+    history.splice(Math.max(depth, 1));
+    show();
+  });
 
   function replace(screen, ...args) {
     history.splice(-1, 1, [screen, args]);
@@ -770,6 +785,11 @@
 
   // 数字キー 1〜4 / A〜D で回答（ア〜エの順。3択ならア〜ウ）、Enter で次へ
   document.addEventListener("keydown", (e) => {
+    // Esc で一つ前の画面に戻る（入力欄では入力のじゃまをしない）
+    if (e.key === "Escape" && e.target.tagName !== "INPUT" && !backBtn.hidden) {
+      back();
+      return;
+    }
     if (e.target.tagName === "INPUT" || e.key.length !== 1) return;
     const key = e.key.toUpperCase();
     const i = "1234".includes(key) ? "1234".indexOf(key) : "ABCD".indexOf(key);
@@ -827,5 +847,6 @@
     ]);
   }
 
-  go(homeScreen);
+  history.push([homeScreen, []]); // 最初の画面はブラウザの履歴に積まない
+  show();
 })();

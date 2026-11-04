@@ -45,26 +45,37 @@ body {
 button { font: inherit; color: inherit; }
 
 .app-header {
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 中身の幅を本文（.app）とそろえ、戻るボタンを本文の左端の近くに置く */
+.app-header-inner {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 56px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  max-width: 720px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 16px;
+  box-sizing: border-box;
 }
 
 .app-title { margin: 0; font-size: 1.25rem; letter-spacing: 0.05em; }
 
 .back-btn {
   position: absolute;
-  left: 12px;
+  left: 8px;
   border: none;
+  border-radius: 8px;
   background: none;
   color: var(--accent);
   cursor: pointer;
   padding: 8px;
 }
+.back-btn:hover { background: var(--accent-soft); }
 
 .app {
   max-width: 720px;
