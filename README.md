@@ -62,6 +62,8 @@
 
 `data/terms.js` の `TERMS` 配列に追加します。ジャンル・カテゴリは用語に書いた名前から自動で作られます。
 
+`data/extra.js` には、terms.js にある用語への追加問題が `add("用語名", [問題…])` の形で入っています（terms.js の後に読み込みます）。
+
 ```js
 window.TERMS = [
   {
