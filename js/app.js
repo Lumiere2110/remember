@@ -1581,6 +1581,80 @@
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const findBook = (id) => wordbooks.find((b) => b.id === id);
 
+  // ---------- 意味の自動入力（ゲームの用語データ → Wikipedia の要約の順に探す） ----------
+
+  const normalizeWord = (s) => s.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+
+  // 長い説明は最初の1〜2文だけにする
+  function shortText(text, max = 220) {
+    const sentences = text.replace(/\s+/g, " ").trim()
+      .replace(/([^\x00-\x7F]) (?=[^\x00-\x7F])/g, "$1") // 読みがなを消した後に残る「ミトコンドリア は」の空白を消す
+      .match(/[^。]+。?/g) || [text];
+    let out = "";
+    for (const sentence of sentences) {
+      if (out && (out + sentence).length > max) break;
+      out += sentence;
+      if (out.length >= 60) break;
+    }
+    return out.length > max ? out.slice(0, max) + "…" : out;
+  }
+
+  async function wikiSummary(title) {
+    const res = await fetch(`https://ja.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}?redirect=true`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.type === "disambiguation" || !data.extract) return null; // 曖昧さ回避のページは使わない
+    return { text: shortText(data.extract), source: `Wikipedia「${data.title}」` };
+  }
+
+  async function lookupMeaning(word) {
+    const key = normalizeWord(word);
+    const term = TERMS.find((t) => normalizeWord(t.name) === key);
+    if (term && (term.description || term.explanation)) {
+      return { text: term.description || shortText(term.explanation), source: "ゲームの用語データ" };
+    }
+    const direct = await wikiSummary(word);
+    if (direct) return direct;
+    // 同じ名前の記事がないときは検索して、上位の記事から探す
+    const res = await fetch(`https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(word)}&srlimit=3&format=json&origin=*`);
+    if (!res.ok) return null;
+    const hits = ((await res.json()).query || {}).search || [];
+    for (const hit of hits) {
+      const found = await wikiSummary(hit.title);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // 「意味を自動入力」ボタン。frontEl の単語を調べて backEl に入れる
+  function autoFillButton(frontEl, backEl) {
+    const status = el("span", { class: "wb-auto-status", "aria-live": "polite" });
+    const button = el("button", {
+      class: "small-btn", type: "button", text: "意味を自動入力",
+      title: "ゲームの用語データ、なければ Wikipedia から意味を調べて入れる",
+    });
+    button.addEventListener("click", async () => {
+      const word = frontEl.value.trim();
+      if (!word) { status.textContent = "先に単語を入力してください"; frontEl.focus(); return; }
+      if (backEl.value.trim() && !confirm("入力済みの意味を書きかえますか？")) return;
+      button.disabled = true;
+      status.textContent = "調べています…";
+      try {
+        const found = await lookupMeaning(word);
+        if (found) {
+          backEl.value = found.text;
+          status.textContent = `${found.source}から入力しました`;
+        } else {
+          status.textContent = "見つかりませんでした。自分で入力してください";
+        }
+      } catch {
+        status.textContent = "調べられませんでした（インターネット接続を確認してください）";
+      }
+      button.disabled = false;
+    });
+    return el("div", { class: "wb-auto" }, [button, status]);
+  }
+
   function missingBook() {
     return el("section", { class: "center-screen" }, [
       el("h2", { text: "単語帳が見つかりません" }),
@@ -1665,7 +1739,7 @@
         f.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) save(); });
         setTimeout(() => f.focus());
         return el("div", { class: "manage-item wb-editing" }, [
-          el("div", { class: "wb-form manage-body" }, [f, b]),
+          el("div", { class: "wb-form manage-body" }, [f, b, autoFillButton(f, b)]),
           el("div", { class: "wb-btns" }, [
             el("button", { class: "small-btn", type: "button", text: "保存", onclick: save }),
             el("button", { class: "small-btn", type: "button", text: "やめる", onclick: () => { editingId = null; render(); } }),
@@ -1775,9 +1849,10 @@
           frontInput,
           backInput,
           el("div", { class: "inline wb-add-row" }, [
-            el("span", { class: "field-hint", text: "Enter で意味へ、Ctrl + Enter で追加" }),
+            autoFillButton(frontInput, backInput),
             el("button", { class: "small-btn", type: "button", text: "追加する", onclick: add }),
           ]),
+          el("span", { class: "field-hint", text: "Enter で意味へ、Ctrl + Enter で追加" }),
         ]),
         termArea,
 

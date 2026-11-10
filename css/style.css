@@ -646,7 +646,9 @@ body.on-title .app-header { display: none; }
 /* 単語カード */
 .wb-form { display: grid; gap: 10px; }
 textarea.text-input { resize: vertical; min-height: 4.5em; line-height: 1.5; }
-.wb-add-row { justify-content: space-between; flex-wrap: nowrap; }
+.wb-add-row { justify-content: space-between; align-items: flex-start; }
+.wb-auto { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; min-width: 0; }
+.wb-auto-status { color: var(--muted); font-size: 0.82rem; }
 .wb-front { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .wb-back { margin: 4px 0 0; color: var(--muted); font-size: 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wb-btns { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
