@@ -642,3 +642,46 @@ body.on-title .app-header { display: none; }
 .catalog-choices li.ok { color: var(--correct); font-weight: 600; }
 
 .app-title { cursor: pointer; }
+
+/* 単語カード */
+.wb-form { display: grid; gap: 10px; }
+textarea.text-input { resize: vertical; min-height: 4.5em; line-height: 1.5; }
+.wb-add-row { justify-content: space-between; flex-wrap: nowrap; }
+.wb-front { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.wb-back { margin: 4px 0 0; color: var(--muted); font-size: 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wb-btns { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.wb-options { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 14px; font-size: 0.92rem; }
+.wb-editing { align-items: flex-start; border-color: var(--accent); }
+.wb-removed { opacity: 0.75; border-style: dashed; }
+.wb-removed-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.wb-removed-head h2 { margin: 0; }
+.wb-result { width: 100%; max-width: 640px; margin: 0 auto 8px; text-align: left; }
+
+.flash-top { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 0.92rem; margin-bottom: 12px; }
+.flashcard {
+  width: 100%;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 24px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.flashcard:hover { border-color: var(--accent); }
+.flashcard.flipped { border-color: var(--accent); background: var(--accent-soft); }
+.flashcard-side { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.15em; }
+.flashcard-text { font-size: 1.8rem; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.flashcard.is-back .flashcard-text { font-size: 1.15rem; font-weight: 500; line-height: 1.7; }
+.flashcard-hint { font-size: 0.78rem; color: var(--muted); }
+.flash-mark { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.flash-mark .picked { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+.flash-nav { display: flex; justify-content: space-between; gap: 10px; margin-top: 12px; }

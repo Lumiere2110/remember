@@ -988,12 +988,19 @@
       if (e.key === "Escape") modal.remove(); // 確認画面を閉じる
       return;
     }
+    const typing = ["INPUT", "TEXTAREA"].includes(e.target.tagName);
     // Esc で一つ前の画面に戻る（入力欄では入力のじゃまをしない）
-    if (e.key === "Escape" && e.target.tagName !== "INPUT" && !backBtn.hidden) {
+    if (e.key === "Escape" && !typing && !backBtn.hidden) {
       back();
       return;
     }
-    if (e.target.tagName === "INPUT") return;
+    if (typing) return;
+    // Space で単語カードを裏返す
+    if (e.key === " ") {
+      const card = app.querySelector('[data-key="flip"]');
+      if (card) { e.preventDefault(); card.click(); }
+      return;
+    }
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       const btn = app.querySelector(`[data-key="${e.key === "ArrowLeft" ? "prev" : "next"}"]`);
       if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
@@ -1173,6 +1180,7 @@
     const menu = [
       ["練習", "ジャンル・タグを選んで、自分のペースで解く", () => go(homeScreen)],
       ["テスト", "ITパスポート・基本情報・応用情報の試験をCBT方式で受ける", () => go(examSelectScreen)],
+      ["単語カード", "自分で単語帳を作って、カードをめくって覚える", () => go(wordbookListScreen)],
       ["設定", "サウンド・カラー・問題一覧", () => go(settingsMenuScreen)],
       ["終了", "ゲームを終了する", quit],
     ];
@@ -1559,6 +1567,387 @@
       search,
       listArea,
     ]);
+  }
+
+  // ======================================================================
+  // 単語カード（自分で作る単語帳。いくつでも作れる）
+  // ======================================================================
+
+  // 単語帳: { id, name, cards: [{ id, front, back }], removed: [削除した単語], random, backFirst }
+  const WORDBOOKS_KEY = "remember.wordbooks";
+  const wordbooks = loadJSON(WORDBOOKS_KEY, []).filter((b) => b && Array.isArray(b.cards));
+  wordbooks.forEach((b) => { if (!Array.isArray(b.removed)) b.removed = []; });
+  const saveWordbooks = () => saveJSON(WORDBOOKS_KEY, wordbooks);
+  const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const findBook = (id) => wordbooks.find((b) => b.id === id);
+
+  function missingBook() {
+    return el("section", { class: "center-screen" }, [
+      el("h2", { text: "単語帳が見つかりません" }),
+      el("p", { class: "lead", text: "削除された可能性があります。" }),
+      el("div", { class: "actions narrow" }, [
+        el("button", { class: "secondary-btn", type: "button", text: "戻る", onclick: back }),
+      ]),
+    ]);
+  }
+
+  function wordbookListScreen() {
+    const nameInput = el("input", { type: "text", class: "text-input", placeholder: "新しい単語帳の名前", maxlength: 30 });
+    function create() {
+      const name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
+      const book = { id: newId(), name, cards: [], removed: [], random: false, backFirst: false };
+      wordbooks.push(book);
+      saveWordbooks();
+      go(wordbookScreen, book.id);
+    }
+    nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) create(); });
+
+    return el("section", {}, [
+      el("h2", { text: "単語カード" }),
+      el("p", { class: "lead", text: "自分で単語を登録して、カードをめくって覚えます。単語帳はいくつでも作れます。" }),
+      wordbooks.length
+        ? el("div", { class: "list" }, wordbooks.map((b) =>
+            listItem(b.name, `${b.cards.length}語`, () => go(wordbookScreen, b.id), {
+              desc: b.cards.slice(0, 4).map((c) => c.front).join("・") || "まだ単語がありません",
+            })
+          ))
+        : el("div", { class: "empty", text: "まだ単語帳がありません。下から作ってください。" }),
+      el("div", { class: "inline new-tag" }, [
+        nameInput,
+        el("button", { class: "small-btn", type: "button", text: "単語帳を作る", onclick: create }),
+      ]),
+      el("p", { class: "field-hint", text: "単語帳はこのブラウザに保存されます（端末・ブラウザごとに別々）。" }),
+    ]);
+  }
+
+  function wordbookScreen(id) {
+    const book = findBook(id);
+    if (!book) return missingBook();
+    const root = el("section");
+    let editingId = null;   // 編集中の単語
+    let termQuery = "";
+    let termOpen = false;
+
+    const hasFront = (front) => book.cards.some((c) => c.front === front);
+
+    function addCard(front, back) {
+      front = front.trim();
+      back = back.trim();
+      if (!front) return false;
+      if (hasFront(front) && !confirm(`「${front}」はすでに登録されています。もう1枚追加しますか？`)) return false;
+      book.cards.push({ id: newId(), front, back });
+      saveWordbooks();
+      return true;
+    }
+
+    function cardText(card) {
+      return el("div", { class: "manage-body" }, [
+        el("p", { class: "wb-front", text: card.front }),
+        card.back ? el("p", { class: "wb-back", text: card.back }) : el("p", { class: "wb-back", text: "（意味なし）" }),
+      ]);
+    }
+
+    function cardRow(card) {
+      if (card.id === editingId) {
+        const f = el("input", { type: "text", class: "text-input", value: card.front, maxlength: 100, "aria-label": "単語" });
+        const b = el("textarea", { class: "text-input", rows: 3, maxlength: 1000, "aria-label": "意味" });
+        b.value = card.back;
+        const save = () => {
+          if (!f.value.trim()) { f.focus(); return; }
+          card.front = f.value.trim();
+          card.back = b.value.trim();
+          saveWordbooks();
+          editingId = null;
+          render();
+        };
+        b.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save(); });
+        f.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) save(); });
+        setTimeout(() => f.focus());
+        return el("div", { class: "manage-item wb-editing" }, [
+          el("div", { class: "wb-form manage-body" }, [f, b]),
+          el("div", { class: "wb-btns" }, [
+            el("button", { class: "small-btn", type: "button", text: "保存", onclick: save }),
+            el("button", { class: "small-btn", type: "button", text: "やめる", onclick: () => { editingId = null; render(); } }),
+          ]),
+        ]);
+      }
+      return el("div", { class: "manage-item" }, [
+        cardText(card),
+        el("div", { class: "wb-btns" }, [
+          el("button", { class: "small-btn", type: "button", text: "編集", onclick: () => { editingId = card.id; render(); } }),
+          el("button", {
+            class: "small-btn danger", type: "button", text: "削除", title: "単語帳から外す（下の「削除した単語」から入れなおせます）",
+            onclick: () => {
+              book.cards = book.cards.filter((c) => c !== card);
+              book.removed.unshift(card);
+              saveWordbooks();
+              render();
+            },
+          }),
+        ]),
+      ]);
+    }
+
+    function render() {
+      // 名前の変更・単語帳の削除
+      const nameInput = el("input", { type: "text", class: "text-input", value: book.name, maxlength: 30 });
+      const rename = () => {
+        const to = nameInput.value.trim();
+        if (!to || to === book.name) return;
+        book.name = to;
+        saveWordbooks();
+        render();
+      };
+      nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) rename(); });
+
+      // 単語を追加
+      const frontInput = el("input", { type: "text", class: "text-input", placeholder: "単語（カードの表）", maxlength: 100 });
+      const backInput = el("textarea", { class: "text-input", rows: 3, placeholder: "意味・説明（カードの裏）", maxlength: 1000 });
+      const add = () => {
+        if (!frontInput.value.trim()) { frontInput.focus(); return; }
+        if (!addCard(frontInput.value, backInput.value)) return;
+        render();
+        root.querySelector(".wb-new-front").focus();
+      };
+      frontInput.classList.add("wb-new-front");
+      frontInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); backInput.focus(); }
+      });
+      backInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) add(); });
+
+      // ゲームの用語から追加
+      const q = termQuery.trim().toLowerCase();
+      const terms = q ? TERMS.filter((t) => t.name.toLowerCase().includes(q)) : TERMS;
+      const termSearch = el("input", { type: "search", class: "text-input wb-term-search", placeholder: "用語名で絞り込み", value: termQuery });
+      termSearch.addEventListener("input", () => {
+        termQuery = termSearch.value;
+        render();
+        const s = root.querySelector(".wb-term-search");
+        s.focus();
+        s.setSelectionRange(s.value.length, s.value.length);
+      });
+      const termArea = el("details", { class: "add-area", open: termOpen }, [
+        el("summary", { text: `ゲームの用語から追加する（${TERMS.length}語から）` }),
+        termSearch,
+        terms.length
+          ? el("div", { class: "manage-list" }, terms.map((t) => {
+              const added = hasFront(t.name);
+              return el("div", { class: "manage-item" }, [
+                el("div", { class: "manage-body" }, [
+                  el("div", { class: "manage-meta" }, [el("span", { text: `${t.genre} ／ ${t.category}` })]),
+                  el("p", { class: "wb-front", text: t.name }),
+                  t.description ? el("p", { class: "wb-back", text: t.description }) : null,
+                ]),
+                el("button", {
+                  class: "small-btn", type: "button", text: added ? "追加済み" : "追加", disabled: added,
+                  onclick: () => { addCard(t.name, t.description || t.explanation || ""); render(); },
+                }),
+              ]);
+            }))
+          : el("div", { class: "empty", text: "一致する用語がありません。" }),
+      ]);
+      termArea.addEventListener("toggle", () => { termOpen = termArea.open; });
+
+      const option = (key, label) => {
+        const box = el("input", { type: "checkbox", checked: !!book[key] });
+        box.addEventListener("change", () => { book[key] = box.checked; saveWordbooks(); });
+        return el("label", { class: "check" }, [box, label]);
+      };
+
+      setChildren(
+        root,
+        el("h2", { text: book.name }),
+        el("p", { class: "lead", text: `${book.cards.length}語` }),
+        el("div", { class: "card" }, [
+          el("button", {
+            class: "primary-btn", type: "button", text: "カードで覚える", disabled: book.cards.length === 0,
+            onclick: () => go(flashcardScreen, book.id, null),
+          }),
+          el("div", { class: "wb-options" }, [
+            option("random", "ランダムな順番"),
+            option("backFirst", "意味を先に見せる"),
+          ]),
+        ]),
+
+        el("h2", { text: "単語を追加", class: "section-gap" }),
+        el("div", { class: "card wb-form" }, [
+          frontInput,
+          backInput,
+          el("div", { class: "inline wb-add-row" }, [
+            el("span", { class: "field-hint", text: "Enter で意味へ、Ctrl + Enter で追加" }),
+            el("button", { class: "small-btn", type: "button", text: "追加する", onclick: add }),
+          ]),
+        ]),
+        termArea,
+
+        el("h2", { text: `登録した単語（${book.cards.length}語）`, class: "section-gap" }),
+        book.cards.length
+          ? el("div", { class: "manage-list" }, book.cards.map(cardRow))
+          : el("div", { class: "empty", text: "まだ単語がありません。上の「単語を追加」から登録できます。" }),
+
+        book.removed.length
+          ? el("div", { class: "section-gap" }, [
+              el("div", { class: "wb-removed-head" }, [
+                el("h2", { text: `削除した単語（${book.removed.length}語）` }),
+                el("div", { class: "wb-btns" }, [
+                  el("button", {
+                    class: "small-btn", type: "button", text: "すべて入れなおす",
+                    onclick: () => { book.cards.push(...book.removed); book.removed = []; saveWordbooks(); render(); },
+                  }),
+                  el("button", {
+                    class: "small-btn danger", type: "button", text: "すべて完全に削除",
+                    onclick: () => {
+                      if (!confirm(`削除した単語${book.removed.length}語を完全に削除しますか？（元に戻せません）`)) return;
+                      book.removed = [];
+                      saveWordbooks();
+                      render();
+                    },
+                  }),
+                ]),
+              ]),
+              el("p", { class: "lead", text: "「入れなおす」で単語帳に戻せます。" }),
+              el("div", { class: "manage-list" }, book.removed.map((card) =>
+                el("div", { class: "manage-item wb-removed" }, [
+                  cardText(card),
+                  el("div", { class: "wb-btns" }, [
+                    el("button", {
+                      class: "small-btn", type: "button", text: "入れなおす",
+                      onclick: () => {
+                        book.removed = book.removed.filter((c) => c !== card);
+                        book.cards.push(card);
+                        saveWordbooks();
+                        render();
+                      },
+                    }),
+                    el("button", {
+                      class: "small-btn danger", type: "button", text: "完全に削除",
+                      onclick: () => {
+                        if (!confirm(`「${card.front}」を完全に削除しますか？（元に戻せません）`)) return;
+                        book.removed = book.removed.filter((c) => c !== card);
+                        saveWordbooks();
+                        render();
+                      },
+                    }),
+                  ]),
+                ])
+              )),
+            ])
+          : null,
+
+        el("h2", { text: "単語帳の設定", class: "section-gap" }),
+        el("div", { class: "card tag-settings" }, [
+          el("span", { class: "field-label", text: "単語帳の名前" }),
+          el("div", { class: "inline" }, [
+            nameInput,
+            el("button", { class: "small-btn", type: "button", text: "変更", onclick: rename }),
+            el("button", {
+              class: "small-btn danger", type: "button", text: "単語帳を削除",
+              onclick: () => {
+                if (!confirm(`単語帳「${book.name}」を削除しますか？（入っている単語もすべて消え、元に戻せません）`)) return;
+                wordbooks.splice(wordbooks.indexOf(book), 1);
+                saveWordbooks();
+                back();
+              },
+            }),
+          ]),
+        ])
+      );
+    }
+
+    render();
+    return root;
+  }
+
+  // カードをめくって覚える。onlyIds を渡すとその単語だけ（「まだ」の単語のやり直し）
+  function flashcardScreen(id, onlyIds) {
+    const book = findBook(id);
+    if (!book) return missingBook();
+    let deck = onlyIds ? book.cards.filter((c) => onlyIds.includes(c.id)) : book.cards.slice();
+    if (book.random) deck = shuffle(deck);
+    const known = new Map(); // カードid → true(覚えた) / false(まだ)
+    let index = 0;
+    let flipped = false;
+    const root = el("section");
+
+    function mark(value) {
+      known.set(deck[index].id, value);
+      playSound(value ? "correct" : "wrong");
+      next();
+    }
+    function next() {
+      if (index < deck.length - 1) { index++; flipped = false; render(); }
+      else finish();
+    }
+
+    function finish() {
+      const notYet = deck.filter((c) => known.get(c.id) !== true);
+      const okCount = deck.length - notYet.length;
+      playSound("finish");
+      setChildren(
+        root,
+        el("div", { class: "center-screen" }, [
+          el("h2", { text: "おつかれさまでした" }),
+          el("p", { class: "lead", text: `${deck.length}枚のうち、覚えた ${okCount}枚 ／ まだ ${notYet.length}枚` }),
+          notYet.length
+            ? el("div", { class: "manage-list wb-result" }, notYet.map((c) =>
+                el("div", { class: "manage-item" }, [
+                  el("div", { class: "manage-body" }, [
+                    el("p", { class: "wb-front", text: c.front }),
+                    c.back ? el("p", { class: "wb-back", text: c.back }) : null,
+                  ]),
+                ])
+              ))
+            : null,
+          el("div", { class: "actions narrow" }, [
+            notYet.length
+              ? el("button", {
+                  class: "primary-btn", type: "button", text: "「まだ」の単語だけもう一度",
+                  onclick: () => replace(flashcardScreen, id, notYet.map((c) => c.id)),
+                })
+              : null,
+            el("button", { class: "secondary-btn", type: "button", text: "最初からもう一度", onclick: () => replace(flashcardScreen, id, null) }),
+            el("button", { class: "secondary-btn", type: "button", text: "単語帳に戻る", onclick: back }),
+          ]),
+        ])
+      );
+    }
+
+    function render() {
+      if (!deck.length) { finish(); return; }
+      const card = deck[index];
+      const showBack = flipped !== !!book.backFirst; // 「意味を先に見せる」なら裏から
+      const state = known.get(card.id);
+      setChildren(
+        root,
+        el("div", { class: "flash-top" }, [
+          el("span", { text: book.name }),
+          el("span", { text: `${index + 1} / ${deck.length}` }),
+        ]),
+        el("button", {
+          class: `flashcard${flipped ? " flipped" : ""}${showBack ? " is-back" : ""}`, type: "button", "data-key": "flip",
+          onclick: () => { flipped = !flipped; render(); },
+        }, [
+          el("span", { class: "flashcard-side", text: showBack ? "意味" : "単語" }),
+          el("span", { class: "flashcard-text", text: (showBack ? card.back : card.front) || "（意味なし）" }),
+          el("span", { class: "flashcard-hint", text: "クリック（Space）で裏返す" }),
+        ]),
+        el("div", { class: "flash-mark" }, [
+          el("button", { class: `secondary-btn${state === false ? " picked" : ""}`, type: "button", text: "まだ", onclick: () => mark(false) }),
+          el("button", { class: `primary-btn${state === true ? " picked" : ""}`, type: "button", text: "覚えた", onclick: () => mark(true) }),
+        ]),
+        el("div", { class: "flash-nav" }, [
+          el("button", {
+            class: "small-btn", type: "button", text: "← 前へ", "data-key": "prev", disabled: index === 0,
+            onclick: () => { index--; flipped = false; render(); },
+          }),
+          el("button", { class: "small-btn", type: "button", text: index === deck.length - 1 ? "終わる" : "次へ →", "data-key": "next", onclick: next }),
+        ])
+      );
+    }
+
+    render();
+    return root;
   }
 
   // ヘッダーの「remember」を押すとタイトル画面に戻る
