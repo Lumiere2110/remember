@@ -80,6 +80,8 @@
 
 `data/extra3.js` には、ITパスポート試験レベル（Lv.1）の問題（既存の用語への追加と、KPI・DX・無線LAN などの新しい用語）が入っています。
 
+`data/extra4.js` には、さらに追加した用語（CSMA/CD・SNMP・ロールバック・挿入ソート・GPU・要件定義・損益計算書・生成AI など 68語）が、extra2.js と同じ書き方で入っています。
+
 ```js
 window.TERMS = [
   {
