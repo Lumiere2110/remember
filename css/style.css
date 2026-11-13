@@ -590,10 +590,11 @@ body.on-title .app-header { display: none; }
 .exam-rule { margin: 0; font-size: 0.9rem; }
 .exam-plan { margin: 0; font-size: 0.88rem; color: var(--muted); }
 .exam-plan.short { color: var(--fav); }
-.exam-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0 0 16px; }
+.exam-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0; }
 .exam-facts dt { font-weight: 700; }
 .exam-facts dd { margin: 0; }
-.exam-notes { margin: 0; padding-left: 1.2em; color: var(--muted); font-size: 0.92rem; }
+.exam-options { margin-top: 16px; }
+.exam-notes { margin: 16px 0 0; padding-left: 1.2em; color: var(--muted); font-size: 0.92rem; }
 .exam-score { text-align: center; }
 .exam-verdict { font-size: 2rem; font-weight: 800; letter-spacing: 0.2em; }
 .exam-score.pass .exam-verdict { color: var(--correct); }

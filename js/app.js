@@ -896,6 +896,25 @@
     const results = [];
     let index = 0;
     const root = el("section", { class: "cbt-screen" });
+    // テストで制限時間ありのときは、試験全体の残り時間で管理する（答え合わせを見ている間も減る）
+    const quizStart = performance.now();
+    const deadline = settings.totalMs ? quizStart + settings.totalMs : 0;
+    let warned = false;
+    let ended = false;
+    if (settings.exam) playSound("start");
+
+    // 結果画面へ。まだ答えていない問題は未回答（不正解）にする
+    function finishNow() {
+      if (ended) return;
+      ended = true;
+      stopTimer();
+      for (let i = results.length; i < questions.length; i++) {
+        const q = questions[i];
+        results.push({ question: q, selected: null, correct: false, order: q.choices.map((_, j) => j), unanswered: true });
+      }
+      if (settings.exam) playSound("finish");
+      replace(resultScreen, source, results, settings); // 戻るで結果からクイズに戻らないよう、履歴を差し替える
+    }
 
     function render() {
       stopTimer();
@@ -909,15 +928,14 @@
       const timeLabel = el("span", { class: "cbt-time" });
       const feedbackArea = el("div");
       const nextBtn = navButton(isLast ? "結果を見る ▶" : "次の問題 ▶", () => {
-        if (isLast) replace(resultScreen, source, results, settings); // 戻るで結果からクイズに戻らないよう、履歴を差し替える
+        if (isLast) finishNow();
         else { index++; render(); }
       }, { key: "next", primary: true, disabled: true });
       const choiceBtns = order.map((orig, i) => choiceButton(i, q.choices[orig], () => answer(orig)));
 
       function answer(selected) {
-        if (answered) return;
+        if (answered || ended) return;
         answered = true;
-        stopTimer();
         const correct = selected === q.answer;
         results.push({ question: q, selected, correct, order });
         playSound(correct ? "correct" : "wrong");
@@ -947,7 +965,7 @@
         head: [
           el("span", { class: "cbt-num", text: `問${index + 1}` }),
           el("span", { class: "cbt-count", text: `/ ${questions.length}問` }),
-          el("span", { class: "cbt-term", text: source.mixed ? q.term.name : source.title }),
+          el("span", { class: "cbt-term", text: source.hideTerm ? source.title : source.mixed ? q.term.name : source.title }),
           timeLabel,
         ],
         body: [
@@ -958,23 +976,47 @@
           tagEditor(q),
           feedbackArea,
         ],
-        foot: [el("span", { class: "spacer" }), nextBtn],
+        foot: [
+          settings.exam
+            ? navButton("試験終了", () => {
+                if (confirm("試験を終了して採点しますか？\nまだ答えていない問題は不正解になります。")) finishNow();
+              }, { extraClass: "finish" })
+            : null,
+          el("span", { class: "spacer" }),
+          nextBtn,
+        ],
       }));
 
-      if (settings.timeLimit) {
-        const limitMs = settings.timeLimit * 1000;
-        const startAt = performance.now();
-        const tick = (now) => {
-          const remain = Math.max(0, limitMs - (now - startAt));
+      // 時間。1問ごとの制限時間（練習）、試験全体の制限時間（テスト）、経過時間（制限なしのテスト）
+      if (!settings.timeLimit && !deadline && !settings.exam) return;
+      const limitMs = settings.timeLimit * 1000;
+      const qStart = performance.now();
+      const tick = (now) => {
+        if (deadline) {
+          const remain = deadline - now;
+          if (!settings.timeLimit) {
+            timeLabel.textContent = `残り ${formatTime(Math.max(0, remain))}`;
+            const low = remain <= Math.min(5 * 60000, settings.totalMs * 0.1);
+            timeLabel.classList.toggle("low", low);
+            if (low && !warned) { warned = true; playSound("warn"); }
+          }
+          if (remain <= 0) { finishNow(); return; }
+        } else if (!settings.timeLimit) {
+          timeLabel.textContent = `経過 ${formatTime(now - quizStart)}`;
+        }
+        if (settings.timeLimit && !answered) {
+          const remain = Math.max(0, limitMs - (now - qStart));
           timerBar.style.width = `${(remain / limitMs) * 100}%`;
           timerBar.classList.toggle("low", remain <= Math.min(5000, limitMs * 0.3));
           timeLabel.textContent = `残り ${Math.ceil(remain / 1000)}秒`;
           timeLabel.classList.toggle("low", remain <= Math.min(5000, limitMs * 0.3));
           if (remain <= 0) answer(null);
-          else timerId = requestAnimationFrame(tick);
-        };
+        }
+        // 1問ごとの制限時間だけの練習では、答えたら止める
+        if (answered && !deadline && !settings.exam) return;
         timerId = requestAnimationFrame(tick);
-      }
+      };
+      timerId = requestAnimationFrame(tick);
     }
 
     render();
@@ -1029,7 +1071,7 @@
           class: "a",
           text: r.correct
             ? `正解：${q.choices[q.answer]}`
-            : `あなたの回答：${r.selected === null ? (settings.mode === "instant" ? "時間切れ" : "未回答") : q.choices[r.selected]} ／ 正解：${q.choices[q.answer]}`,
+            : `あなたの回答：${r.selected === null ? (settings.mode === "instant" && !r.unanswered ? "時間切れ" : "未回答") : q.choices[r.selected]} ／ 正解：${q.choices[q.answer]}`,
         }),
         explanationBlock(q)
           ? el("details", { class: "review-explain" }, [el("summary", { text: "解説を見る" }), explanationBlock(q, r.order)])
@@ -1257,18 +1299,27 @@
     return { pool, count, minutes };
   }
 
+  // テストの受け方（制限時間のあり・なし、採点のしかた）。受験前の画面で選び、ブラウザに保存する
+  const EXAM_OPTIONS_KEY = "remember.examOptions";
+  const examOptions = { timed: true, mode: "exam", ...loadJSON(EXAM_OPTIONS_KEY, {}) };
+
   function startExam(exam, replaceCurrent = false) {
     const { pool, count, minutes } = examPlan(exam);
     const questions = shuffle(pool).slice(0, count);
     const source = { title: exam.name, items: questions, mixed: true, hideTerm: true };
-    const settings = { ...DEFAULT_SETTINGS, mode: "exam", totalMs: minutes * 60000, exam };
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      mode: examOptions.mode === "instant" ? "instant" : "exam",
+      totalMs: examOptions.timed ? minutes * 60000 : 0,
+      exam,
+    };
     (replaceCurrent ? replace : go)(quizScreen, source, questions, settings);
   }
 
   function examSelectScreen() {
     return el("section", {}, [
       el("h2", { text: "テスト" }),
-      el("p", { class: "lead", text: "受験する試験を選んでください。本番と同じように CBT方式で、最後にまとめて採点します。" }),
+      el("p", { class: "lead", text: "受験する試験を選んでください。本番と同じように CBT方式で出題します。制限時間のあり・なしと採点のしかたは、次の画面で選べます。" }),
       el("div", { class: "exam-list" }, EXAMS.map((exam) => {
         const { count, minutes } = examPlan(exam);
         const short = count < exam.count;
@@ -1295,27 +1346,68 @@
   // 受験前の説明画面
   function examIntroScreen(exam) {
     const { count, minutes } = examPlan(exam);
-    return el("section", {}, [
-      el("h2", { text: exam.name }),
-      el("div", { class: "card exam-intro" }, [
-        el("dl", { class: "exam-facts" }, [
-          el("dt", { text: "問題数" }), el("dd", { text: `${count}問${count < exam.count ? `（本番は${exam.count}問）` : ""}` }),
-          el("dt", { text: "試験時間" }), el("dd", { text: `${minutes}分${count < exam.count ? `（本番は${exam.minutes}分）` : ""}` }),
-          el("dt", { text: "合格基準" }), el("dd", { text: exam.rule }),
+    const root = el("section");
+
+    function choice(options, current, onSelect) {
+      return el("div", { class: "segmented" }, options.map(([value, label]) =>
+        el("button", {
+          type: "button", class: value === current ? "active" : "", text: label,
+          onclick: () => { onSelect(value); saveJSON(EXAM_OPTIONS_KEY, examOptions); render(); },
+        })
+      ));
+    }
+
+    function render() {
+      const instant = examOptions.mode === "instant";
+      const notes = [
+        "問題はランダムに選ばれ、選択肢の並びも毎回変わります。",
+        ...(instant
+          ? [
+              "1問ごとに答えると、すぐに正解と解説が表示されます。答えは変えられません。",
+              "最後の問題に答えるか「試験終了」を押すと、点数と合否を表示します。答えていない問題は不正解になります。",
+            ]
+          : [
+              "「前の問題」「次の問題」や問題一覧で自由に移動し、答えを何度でも変えられます。",
+              "迷った問題には「後で見直す」を付けておけます。",
+              "「試験終了」を押すと採点します。",
+            ]),
+        examOptions.timed
+          ? `制限時間は${minutes}分です。時間が0になると、その時点で採点します。`
+          : "制限時間はありません。かかった時間（経過時間）が表示されます。",
+        "途中で戻ると、それまでの解答は消えます。",
+        "点数は正答率から計算した目安です（本番は IRT という方式で採点されます）。",
+      ];
+
+      setChildren(
+        root,
+        el("h2", { text: exam.name }),
+        el("div", { class: "card exam-intro" }, [
+          el("dl", { class: "exam-facts" }, [
+            el("dt", { text: "問題数" }), el("dd", { text: `${count}問${count < exam.count ? `（本番は${exam.count}問）` : ""}` }),
+            el("dt", { text: "試験時間" }), el("dd", { text: `${minutes}分${count < exam.count ? `（本番は${exam.minutes}分）` : ""}` }),
+            el("dt", { text: "合格基準" }), el("dd", { text: exam.rule }),
+          ]),
         ]),
-        el("ul", { class: "exam-notes" }, [
-          el("li", { text: "問題はランダムに選ばれ、選択肢の並びも毎回変わります。" }),
-          el("li", { text: "「前の問題」「次の問題」や問題一覧で自由に移動し、答えを何度でも変えられます。" }),
-          el("li", { text: "迷った問題には「後で見直す」を付けておけます。" }),
-          el("li", { text: "「試験終了」を押すか、時間が0になると採点します。" }),
-          el("li", { text: "途中で戻ると、それまでの解答は消えます。" }),
-          el("li", { text: "点数は正答率から計算した目安です（本番は IRT という方式で採点されます）。" }),
+        el("div", { class: "card exam-options" }, [
+          el("div", { class: "field" }, [
+            el("span", { class: "field-label", text: "制限時間" }),
+            choice([[true, `あり（${minutes}分）`], [false, "なし"]], examOptions.timed, (v) => { examOptions.timed = v; }),
+          ]),
+          el("div", { class: "field" }, [
+            el("span", { class: "field-label", text: "採点のしかた" }),
+            choice([["exam", "最後にまとめて採点（本番形式）"], ["instant", "1問ずつ答え合わせ"]], instant ? "instant" : "exam", (v) => { examOptions.mode = v; }),
+          ]),
+          el("p", { class: "field-hint", text: "選んだ内容は次回も使われます。" }),
         ]),
-      ]),
-      el("div", { class: "actions" }, [
-        el("button", { class: "primary-btn", type: "button", text: "試験開始", onclick: () => startExam(exam) }),
-      ]),
-    ]);
+        el("ul", { class: "exam-notes" }, notes.map((text) => el("li", { text }))),
+        el("div", { class: "actions" }, [
+          el("button", { class: "primary-btn", type: "button", text: "試験開始", onclick: () => startExam(exam) }),
+        ])
+      );
+    }
+
+    render();
+    return root;
   }
 
   // テストの結果（点数・合否・分野別）
